@@ -4,6 +4,13 @@ Personal Android app (Pixel 9a) that shows nearby walking/biking trails — pave
 on a map, colored by surface. Test location: **Kansas City** (39.0997, -94.5786).
 Single-user, personal. App-only (no backend): the phone talks to OpenStreetMap + elevation APIs directly.
 
+## Repo & releases
+- GitHub: **`Pr0zak/trailmap`** (public). `main` branch. Commit identity is the non-personal `Pr0zak <pr0zak@users.noreply.github.com>`.
+- CI (`.github/workflows/ci.yml`): builds the debug APK on every push/PR.
+- Release (`.github/workflows/release.yml`): push a **`app-vX.Y.Z`** tag → builds + signs the APK → attaches it to a GitHub Release. Bump `VERSION` to match.
+- **Signing key** lives at `~/.trailmap-signing/` (`release.jks` + `signing.env` with the password; **not** in the repo). The same values are GitHub repo secrets `KEYSTORE_BASE64 / KEYSTORE_PASSWORD / KEY_ALIAS(=trailmap) / KEY_PASSWORD`. Don't lose the keystore — it's required to ship app updates.
+- Before any push: run `bash ~/.claude/skills/github-publish-check/scan.sh /home/spider/trailmap` (public repo — keep the OSM User-Agent + everything else free of personal data).
+
 ## Stack
 - **Kotlin / Jetbrains Compose**, Material 3, **MapLibre GL Native 11.5.2** (keyless raster basemap).
 - OkHttp + kotlinx-serialization (no Retrofit). Location = fused (`play-services-location`) **with a `LocationManager` fallback** (so device/emulator GPS works even without Play Services), then a Kansas City fallback.
