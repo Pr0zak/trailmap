@@ -1,0 +1,9 @@
+<resources>
+    <color name="trail_green">#2E7D4F</color>
+    <color name="surface">#F7F5EF</color>
+    <!-- surface-type semantic colors (paved / gravel / dirt) -->
+    <color name="surf_paved">#2E7D4F</color>
+    <color name="surf_gravel">#C9922B</color>
+    <color name="surf_dirt">#8A5A2B</color>
+    <color name="ic_launcher_background">#2E7D4F</color>
+</resources>

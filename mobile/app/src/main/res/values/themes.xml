@@ -1,0 +1,7 @@
+<resources>
+    <!-- Base theme; the Compose UI supplies the real Material3 colors. -->
+    <style name="Theme.Trailmap" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@color/trail_green</item>
+        <item name="android:windowBackground">@color/surface</item>
+    </style>
+</resources>

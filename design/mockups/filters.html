@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Trailhead - Filter Trails</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;700;900&amp;family=Inter:wght@400;500;600&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        primary: "#2E7D32",
+                        surface: "#F7F5F0",
+                        "on-surface": "#1B1C18",
+                        "on-surface-variant": "#4A4D44",
+                        paved: "#2E7D32",
+                        gravel: "#C8A04B",
+                        dirt: "#8B5E3C"
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.5rem",
+                        "lg": "1rem",
+                        "xl": "1.5rem",
+                        "full": "9999px"
+                    },
+                    fontFamily: {
+                        headline: ["Outfit", "sans-serif"],
+                        body: ["Inter", "sans-serif"],
+                        label: ["Inter", "sans-serif"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .fill-icon {
+            font-variation-settings: 'FILL' 1;
+        }
+        .switch-input:checked + .switch-track {
+            background-color: #2E7D32;
+        }
+        .switch-input:checked + .switch-track .switch-thumb {
+            transform: translateX(1.25rem);
+            background-color: white;
+        }
+        .custom-slider {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 4px;
+            background: #E0E2D9;
+            border-radius: 2px;
+            outline: none;
+        }
+        .custom-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #2E7D32;
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .backdrop-blur-map {
+            backdrop-filter: blur(4px) brightness(0.6);
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-[#F7F5F0] font-body text-on-surface antialiased overflow-hidden">
+<!-- Background Map Context (Dimmed) -->
+<div class="fixed inset-0 z-0">
+<div class="absolute inset-0 backdrop-blur-map z-10"></div>
+<img class="w-full h-full object-cover" data-alt="A detailed topographic map of a lush Kansas City park area featuring winding green, tan, and brown trail lines cutting through forest patches and river banks. The map aesthetic is clean and modern with soft beige land masses and high-contrast labels. Soft natural daylight illuminates the map, providing an outdoor, earthy atmosphere consistent with a premium trail-finding application." data-location="Kansas City" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAU7xyqEbt4sVrFrYDKXIKMHSUfp7OB8S0zHbA28FtvsD7I8PmR4ihLmyVGlXhtkz2TClCNikHHV0URLivcEODHgGsZ8jDt93l5N4rV_hbiAaAsJzDpVu2qxtVgczxa3tvh4CTosXwR1Y8vw3WQ0ZPMlzJ4NBrNcJm4Se4kF0irsA24FTPQFUYYc8irZdNb5-4y7knUXLBxR6APeXHCJZgI121RvvmWnFJwiO_T7-cc_oQ0hi8RI8Ag-iCIKHrSVjWKdDPULNuloEKz"/>
+</div>
+<!-- Bottom Sheet Container -->
+<div class="fixed inset-x-0 bottom-0 z-50 flex flex-col items-center">
+<!-- Bottom Sheet Content -->
+<div class="w-full max-w-2xl bg-surface rounded-t-3xl shadow-2xl overflow-hidden animate-slide-up">
+<!-- Drag Handle -->
+<div class="w-full flex justify-center py-3">
+<div class="w-12 h-1.5 bg-[#4A4D44]/20 rounded-full"></div>
+</div>
+<!-- Header -->
+<header class="px-6 py-4 flex justify-between items-center">
+<h1 class="font-headline text-2xl font-bold text-on-surface">Filters</h1>
+<button class="text-primary font-semibold text-sm px-2 py-1 hover:bg-primary/5 rounded transition-colors">Reset</button>
+</header>
+<!-- Scrollable Content Area -->
+<div class="px-6 pb-24 space-y-8 max-h-[618px] overflow-y-auto">
+<!-- Surface Section -->
+<section>
+<h2 class="font-headline text-sm font-bold text-on-surface-variant uppercase tracking-wider mb-4">Surface</h2>
+<div class="space-y-3">
+<!-- Paved Card -->
+<div class="flex items-center justify-between p-4 bg-white rounded-xl shadow-sm border border-gray-100">
+<div class="flex items-center gap-3">
+<div class="w-4 h-10 rounded-full bg-paved"></div>
+<div>
+<p class="font-semibold text-on-surface">Paved</p>
+<p class="text-xs text-on-surface-variant">Concrete or Asphalt</p>
+</div>
+</div>
+<label class="relative inline-flex items-center cursor-pointer">
+<input checked="" class="sr-only peer switch-input" type="checkbox"/>
+<div class="w-11 h-6 bg-[#E0E2D9] rounded-full switch-track transition-colors duration-200">
+<div class="absolute left-1 top-1 w-4 h-4 bg-white rounded-full switch-thumb transition-transform duration-200 shadow-sm"></div>
+</div>
+</label>
+</div>
+<!-- Gravel Card -->
+<div class="flex items-center justify-between p-4 bg-white rounded-xl shadow-sm border border-gray-100">
+<div class="flex items-center gap-3">
+<div class="w-4 h-10 rounded-full bg-gravel"></div>
+<div>
+<p class="font-semibold text-on-surface">Gravel</p>
+<p class="text-xs text-on-surface-variant">Crushed Limestone</p>
+</div>
+</div>
+<label class="relative inline-flex items-center cursor-pointer">
+<input checked="" class="sr-only peer switch-input" type="checkbox"/>
+<div class="w-11 h-6 bg-[#E0E2D9] rounded-full switch-track transition-colors duration-200">
+<div class="absolute left-1 top-1 w-4 h-4 bg-white rounded-full switch-thumb transition-transform duration-200 shadow-sm"></div>
+</div>
+</label>
+</div>
+<!-- Dirt Card -->
+<div class="flex items-center justify-between p-4 bg-white rounded-xl shadow-sm border border-gray-100">
+<div class="flex items-center gap-3">
+<div class="w-4 h-10 rounded-full bg-dirt"></div>
+<div>
+<p class="font-semibold text-on-surface">Dirt</p>
+<p class="text-xs text-on-surface-variant">Natural Surface</p>
+</div>
+</div>
+<label class="relative inline-flex items-center cursor-pointer">
+<input checked="" class="sr-only peer switch-input" type="checkbox"/>
+<div class="w-11 h-6 bg-[#E0E2D9] rounded-full switch-track transition-colors duration-200">
+<div class="absolute left-1 top-1 w-4 h-4 bg-white rounded-full switch-thumb transition-transform duration-200 shadow-sm"></div>
+</div>
+</label>
+</div>
+</div>
+</section>
+<!-- Activity Section -->
+<section>
+<h2 class="font-headline text-sm font-bold text-on-surface-variant uppercase tracking-wider mb-4">Activity</h2>
+<div class="grid grid-cols-1 gap-3">
+<!-- Walking Row -->
+<div class="flex items-center justify-between p-4 bg-white rounded-xl shadow-sm border border-gray-100">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-primary text-2xl" data-icon="directions_run">directions_run</span>
+<p class="font-semibold text-on-surface">Walking</p>
+</div>
+<label class="relative inline-flex items-center cursor-pointer">
+<input checked="" class="sr-only peer switch-input" type="checkbox"/>
+<div class="w-11 h-6 bg-[#E0E2D9] rounded-full switch-track transition-colors duration-200">
+<div class="absolute left-1 top-1 w-4 h-4 bg-white rounded-full switch-thumb transition-transform duration-200 shadow-sm"></div>
+</div>
+</label>
+</div>
+<!-- Biking Row -->
+<div class="flex items-center justify-between p-4 bg-white rounded-xl shadow-sm border border-gray-100">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-on-surface-variant text-2xl" data-icon="directions_bike">directions_bike</span>
+<p class="font-semibold text-on-surface">Biking</p>
+</div>
+<label class="relative inline-flex items-center cursor-pointer">
+<input class="sr-only peer switch-input" type="checkbox"/>
+<div class="w-11 h-6 bg-[#E0E2D9] rounded-full switch-track transition-colors duration-200">
+<div class="absolute left-1 top-1 w-4 h-4 bg-white rounded-full switch-thumb transition-transform duration-200 shadow-sm"></div>
+</div>
+</label>
+</div>
+</div>
+</section>
+<!-- Distance Radius Section -->
+<section class="pb-10">
+<div class="flex justify-between items-end mb-4">
+<h2 class="font-headline text-sm font-bold text-on-surface-variant uppercase tracking-wider">Distance radius</h2>
+<span class="text-primary font-bold text-xl font-headline" id="radius-val">5mi</span>
+</div>
+<div class="px-2">
+<input class="custom-slider" id="radius-slider" max="10" min="1" type="range" value="5"/>
+<div class="flex justify-between mt-2 text-[10px] font-bold text-on-surface-variant/60 uppercase tracking-tighter">
+<span>1mi</span>
+<span>10mi</span>
+</div>
+</div>
+</section>
+</div>
+<!-- Sticky Footer CTA -->
+<div class="absolute bottom-0 inset-x-0 p-6 bg-gradient-to-t from-surface via-surface to-transparent pt-10">
+<button class="w-full bg-primary text-white font-headline font-bold py-4 rounded-xl shadow-lg shadow-primary/20 hover:bg-primary/90 active:scale-[0.98] transition-all duration-150">
+                    Show 24 trails
+                </button>
+</div>
+</div>
+</div>
+<!-- Interactive script for slider display -->
+<script>
+        const slider = document.getElementById('radius-slider');
+        const display = document.getElementById('radius-val');
+
+        slider.addEventListener('input', (e) => {
+            display.textContent = `${e.target.value}mi`;
+        });
+
+        // Simple enter animation
+        document.addEventListener('DOMContentLoaded', () => {
+            const sheet = document.querySelector('.animate-slide-up');
+            sheet.style.transform = 'translateY(100%)';
+            sheet.style.transition = 'transform 0.5s cubic-bezier(0.16, 1, 0.3, 1)';
+            requestAnimationFrame(() => {
+                sheet.style.transform = 'translateY(0)';
+            });
+        });
+    </script>
+</body></html>

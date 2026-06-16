@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Cliff Drive Scenic Byway - Trailhead</title>
+<!-- Fonts -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Outfit:wght@600;700;800&amp;family=Public+Sans:wght@700;800&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              primary: "#2E7D32",
+              "on-primary": "#FFFFFF",
+              background: "#F7F5F0",
+              surface: "#FFFFFF",
+              "on-surface": "#1B1C18",
+              "on-surface-variant": "#4A4D44",
+              "paved": "#2E7D32",
+              "gravel": "#C8A04B",
+              "dirt": "#8B5E3C"
+            },
+            borderRadius: {
+              "DEFAULT": "0.5rem",
+              "lg": "1rem",
+              "xl": "1.5rem",
+              "full": "9999px"
+            },
+            fontFamily: {
+              headline: ["Outfit", "sans-serif"],
+              display: ["Public Sans", "sans-serif"],
+              body: ["Inter", "sans-serif"],
+              label: ["Inter", "sans-serif"]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+      .material-symbols-outlined {
+        font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      }
+      .font-display { font-family: 'Public Sans', sans-serif; }
+      .font-headline { font-family: 'Outfit', sans-serif; }
+      .font-body { font-family: 'Inter', sans-serif; }
+      
+      /* Elevation Chart Animation */
+      @keyframes dash {
+        to {
+          stroke-dashoffset: 0;
+        }
+      }
+      .elevation-line {
+        stroke-dasharray: 1000;
+        stroke-dashoffset: 1000;
+        animation: dash 2s ease-out forwards;
+      }
+      .elevation-fill {
+        opacity: 0;
+        animation: fadeIn 1s ease-out 1.5s forwards;
+      }
+      @keyframes fadeIn {
+        to { opacity: 0.1; }
+      }
+
+      /* Safe area for bottom navigation button */
+      .pb-safe {
+        padding-bottom: env(safe-area-inset-bottom);
+      }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-surface font-body selection:bg-primary/30">
+<!-- TopAppBar from JSON Logic -->
+<header class="bg-[#F7F5F0] dark:bg-[#1B1C18] shadow-sm flex items-center justify-between px-4 h-16 w-full sticky top-0 z-50">
+<button class="hover:bg-[#2E7D32]/10 active:scale-95 transition-transform p-2 rounded-full">
+<span class="material-symbols-outlined text-[#2E7D32] dark:text-[#4CAF50]">arrow_back</span>
+</button>
+<h1 class="font-display text-headline-sm font-bold text-[#2E7D32] dark:text-[#4CAF50] truncate px-2">Trail Details</h1>
+<button class="hover:bg-[#2E7D32]/10 active:scale-95 transition-transform p-2 rounded-full">
+<span class="material-symbols-outlined text-[#4A4D44]">bookmark</span>
+</button>
+</header>
+<main class="max-w-2xl mx-auto px-4 pt-6 pb-32">
+<!-- Hero Section -->
+<div class="mb-8">
+<div class="relative w-full h-64 rounded-xl overflow-hidden mb-6 shadow-lg">
+<img class="w-full h-full object-cover" data-alt="A cinematic wide-angle photograph of the Cliff Drive Scenic Byway, featuring a winding paved road carving through lush forest greenery and rugged limestone cliffs. The lighting is the golden hour of a late afternoon, casting long shadows and a warm glow across the landscape. The atmosphere is peaceful and adventurous, utilizing the forest green and earthy tan palette of the Trailhead design system for a cohesive, professional outdoorsy aesthetic." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAoh8SID4NUeq1AG_VPwHOlRVh9N4n30t2p8ZiTMwjjIn8o5Wu7OsEzNjioccNz5HSAfE0csTI8PZ22t3qBCUncpCyaqFALpLQh90eXRNWVJyIxX2nTXPb1-ziXAni4oZ4e7GXdsPnmGxkvIwBt4BKCmC-d5D_a17jcfr9tQyFBh96enJf9qKJDw9644WErQ2u2q7OdX1C4wjShh-y5xBScHNLJQwU7cbwEJNxdA8-YJvNYN_SOQEqbZaibKdAJt_n-3d0GeBVoHdMQ"/>
+<div class="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent"></div>
+</div>
+<h2 class="font-headline text-4xl font-extrabold text-on-surface tracking-tight leading-tight mb-3">Cliff Drive Scenic Byway</h2>
+<div class="flex items-center gap-3">
+<span class="bg-primary text-white text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider">PAVED</span>
+<div class="flex items-center gap-1.5 text-on-surface-variant font-medium text-sm">
+<span class="material-symbols-outlined text-lg">directions_walk</span>
+<span>Walking &amp; Biking</span>
+</div>
+</div>
+</div>
+<!-- Stats Bento Grid -->
+<section class="grid grid-cols-3 gap-3 mb-8">
+<div class="bg-surface p-4 rounded-xl shadow-sm border border-on-surface/5 flex flex-col items-center text-center transition-transform hover:scale-[1.02]">
+<span class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant/70 mb-1">Length</span>
+<span class="text-xl font-bold font-headline text-primary">2.4 mi</span>
+</div>
+<div class="bg-surface p-4 rounded-xl shadow-sm border border-on-surface/5 flex flex-col items-center text-center transition-transform hover:scale-[1.02]">
+<span class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant/70 mb-1">Distance</span>
+<span class="text-xl font-bold font-headline text-primary">0.3 mi</span>
+</div>
+<div class="bg-surface p-4 rounded-xl shadow-sm border border-on-surface/5 flex flex-col items-center text-center transition-transform hover:scale-[1.02]">
+<span class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant/70 mb-1">Elevation</span>
+<span class="text-xl font-bold font-headline text-primary">210 ft</span>
+</div>
+</section>
+<!-- Elevation Profile -->
+<section class="mb-8">
+<h3 class="font-headline text-xl font-bold mb-4 flex items-center gap-2">
+<span class="material-symbols-outlined text-primary">area_chart</span>
+                Elevation profile
+            </h3>
+<div class="bg-surface p-6 rounded-xl shadow-sm border border-on-surface/5">
+<div class="relative h-32 w-full">
+<!-- Elevation Chart SVG -->
+<svg class="w-full h-full preserve-3d" preserveaspectratio="none" viewbox="0 0 100 40">
+<path class="elevation-line" d="M0 35 Q 10 32, 20 28 T 40 22 T 60 30 T 80 15 T 100 10" fill="none" stroke="#2E7D32" stroke-width="1.5"></path>
+<path class="elevation-fill" d="M0 35 Q 10 32, 20 28 T 40 22 T 60 30 T 80 15 T 100 10 V 40 H 0 Z" fill="#2E7D32"></path>
+</svg>
+<!-- Y-Axis Labels -->
+<div class="absolute left-0 top-0 h-full flex flex-col justify-between text-[9px] font-bold text-on-surface-variant/40 -ml-1">
+<span>210ft</span>
+<span>0ft</span>
+</div>
+</div>
+<!-- X-Axis Labels -->
+<div class="flex justify-between mt-2 px-1 text-[10px] font-bold text-on-surface-variant/50">
+<span>0 mi</span>
+<span>1.2 mi</span>
+<span>2.4 mi</span>
+</div>
+</div>
+</section>
+<!-- Route Map Section -->
+<section class="mb-8">
+<div class="flex justify-between items-end mb-4">
+<h3 class="font-headline text-xl font-bold flex items-center gap-2">
+<span class="material-symbols-outlined text-primary">map</span>
+                    Route
+                </h3>
+<a class="text-primary text-sm font-bold flex items-center gap-1 hover:underline" href="#">
+                    Open in Maps
+                    <span class="material-symbols-outlined text-sm">open_in_new</span>
+</a>
+</div>
+<div class="relative rounded-xl overflow-hidden shadow-sm border border-on-surface/5 h-48 group">
+<img class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" data-alt="A clean topographic map layout with a thick forest green line indicating a winding trail route through a park landscape. The map style is minimal with light off-white and soft grey tones, consistent with a modern outdoor navigation app. The design emphasizes clarity and professional cartography using the Trailhead design system's specific green for the path and earthy neutrals for the terrain." data-location="Kansas City" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDJ52fKce55RPov7hkz21QaCgye2N4JeS0U0jSyT1CaZhktx-N5eU9DezaGE6pOl9jSg0l-1SovYvo76wrH8n55ZefPY1uxydcc--hs0VxGm-uPMShNwKcMjppRHAPofuwpJFc4nz3RNCduWRc-2vIAXWSSQGmUqHPKx-ScTt9FBn77i6IDoC9pmyZYoooahatHEshqxIf8AmvSu8CCxErU6EeWATsp9FofcPj0Pbo62DRrwxkkiBhNLmmSWKtXJrGOKFeev4ND_1LJ"/>
+<!-- Custom Map Polyline Overlay (Simulated) -->
+<svg class="absolute inset-0 w-full h-full pointer-events-none drop-shadow-md" preserveaspectratio="none" viewbox="0 0 100 100">
+<path class="opacity-90" d="M10 80 C 20 70, 40 90, 50 50 S 80 10, 90 20" fill="none" stroke="#2E7D32" stroke-linecap="round" stroke-width="3"></path>
+<circle cx="10" cy="80" fill="#2E7D32" r="2.5"></circle>
+<circle cx="90" cy="20" fill="#2E7D32" r="2.5"></circle>
+</svg>
+<div class="absolute bottom-3 right-3 bg-white/90 backdrop-blur-md px-3 py-1.5 rounded-full text-[10px] font-bold text-on-surface-variant shadow-sm border border-on-surface/5">
+                    TAP TO ENLARGE
+                </div>
+</div>
+</section>
+<!-- Description Snippet -->
+<section class="mb-8">
+<h3 class="font-headline text-xl font-bold mb-3">About this trail</h3>
+<p class="text-on-surface-variant leading-relaxed">
+                Cliff Drive is a beautiful State Scenic Byway located within Kessler Park in Kansas City. It offers a stunning route through limestone bluffs and lush greenery, popular for local cyclists and hikers seeking a peaceful escape from the urban core.
+            </p>
+</section>
+</main>
+<!-- Bottom Action Button -->
+<div class="fixed bottom-0 left-0 right-0 p-4 bg-background/80 backdrop-blur-xl border-t border-on-surface/5 z-50">
+<div class="max-w-2xl mx-auto pb-safe">
+<button class="w-full bg-primary hover:bg-primary/90 active:scale-[0.98] transition-all text-white font-headline text-lg font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-2">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">navigation</span>
+                Start navigation
+            </button>
+</div>
+</div>
+<!-- Hidden BottomNavBar logic for non-transactional screens (Though this detail page is technically a sub-page, included for shell consistency) -->
+<!-- The prompt mentions a pinned button at bottom, which overrides the standard BottomNavBar destination count on this specific detail view -->
+<script>
+        // Micro-interactions for stat cards
+        document.querySelectorAll('section > div > div').forEach(card => {
+            card.addEventListener('touchstart', () => {
+                card.style.transform = 'scale(0.95)';
+            });
+            card.addEventListener('touchend', () => {
+                card.style.transform = 'scale(1)';
+            });
+        });
+
+        // Simple scroll effect for TopAppBar shadow
+        window.addEventListener('scroll', () => {
+            const header = document.querySelector('header');
+            if (window.scrollY > 20) {
+                header.classList.add('shadow-md');
+                header.classList.remove('shadow-sm');
+            } else {
+                header.classList.add('shadow-sm');
+                header.classList.remove('shadow-md');
+            }
+        });
+    </script>
+</body></html>

@@ -1,0 +1,53 @@
+name: release
+
+# Tag app-vX.Y.Z to cut a release: builds + signs the phone APK and attaches it to a GitHub Release.
+on:
+  push:
+    tags: ['app-v*']
+
+permissions:
+  contents: write   # create the Release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive version
+        run: echo "VERSION=${GITHUB_REF_NAME#app-v}" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Decode signing keystore
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > mobile/release.jks
+
+      - name: Build signed release APK
+        working-directory: mobile
+        env:
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          ./gradlew assembleRelease --no-daemon \
+            -Pversion.name=$VERSION \
+            -Pandroid.injected.signing.store.file=$PWD/release.jks \
+            -Pandroid.injected.signing.store.password=$KS_PASS \
+            -Pandroid.injected.signing.key.alias=$KEY_ALIAS \
+            -Pandroid.injected.signing.key.password=$KEY_PASS
+
+      - name: Stage APK
+        run: |
+          mkdir -p dist
+          cp mobile/app/build/outputs/apk/release/*.apk "dist/trailmap-${VERSION}.apk"
+          ls -la dist
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: v${{ env.VERSION }}
+          files: dist/trailmap-${{ env.VERSION }}.apk
+          generate_release_notes: true

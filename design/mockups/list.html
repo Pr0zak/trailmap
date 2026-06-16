@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0, viewport-fit=cover" name="viewport"/>
+<title>Nearby Trails - Trailhead KC</title>
+<!-- Fonts -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@700;900&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<!-- Icons -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#2E7D32",
+                        "surface-paved": "#2E7D32",
+                        "surface-gravel": "#C8A04B",
+                        "surface-dirt": "#8B5E3C",
+                        "background-paper": "#F7F5F0",
+                        "on-surface": "#1B1C18",
+                        "on-surface-variant": "#4A4D44"
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.5rem",
+                        "lg": "0.75rem", // 12px requested
+                        "xl": "1.5rem",
+                        "full": "9999px"
+                    },
+                    fontFamily: {
+                        "headline": ["Public Sans", "sans-serif"],
+                        "display": ["Public Sans", "sans-serif"],
+                        "body": ["Inter", "sans-serif"],
+                        "label": ["Inter", "sans-serif"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .active-icon {
+            font-variation-settings: 'FILL' 1;
+        }
+        body {
+            -webkit-tap-highlight-color: transparent;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background-paper font-body text-on-surface antialiased">
+<!-- TopAppBar from Shared Components JSON -->
+<header class="fixed top-0 left-0 right-0 z-50 bg-[#F7F5F0] dark:bg-surface-container flex justify-between items-center px-4 h-16 w-full">
+<div class="flex items-center gap-3">
+<button class="p-2 transition-colors duration-200 ease-in-out hover:bg-surface-variant/50 rounded-full">
+<span class="material-symbols-outlined text-[#4A4D44] dark:text-on-surface-variant">menu</span>
+</button>
+<div class="flex flex-col">
+<h1 class="font-headline text-headline-sm font-bold text-[#1B1C18] leading-tight">Nearby Trails</h1>
+<p class="text-xs text-[#4A4D44] font-medium">Sorted by distance</p>
+</div>
+</div>
+<div class="flex items-center">
+<button class="p-2 transition-colors duration-200 ease-in-out hover:bg-surface-variant/50 rounded-full">
+<span class="material-symbols-outlined text-[#4A4D44] dark:text-on-surface-variant">filter_list</span>
+</button>
+</div>
+</header>
+<!-- Main Content Area -->
+<main class="pt-20 pb-24 px-4 max-w-2xl mx-auto space-y-3">
+<!-- Trail Card 1 -->
+<article class="bg-white rounded-lg shadow-sm p-4 flex justify-between items-center">
+<div class="flex-1">
+<h2 class="font-bold text-lg text-on-surface leading-tight">Cliff Drive Scenic Byway</h2>
+<div class="h-px bg-on-surface-variant/10 w-24 my-2"></div>
+<span class="inline-block px-3 py-0.5 bg-surface-paved text-white text-[10px] font-black tracking-wider rounded-full">PAVED</span>
+</div>
+<div class="flex items-center gap-4 text-right">
+<div class="space-y-0.5">
+<p class="text-xs text-on-surface-variant font-medium">2.4 mi</p>
+<p class="text-[10px] text-on-surface-variant/60">0.3 mi away</p>
+</div>
+<div class="bg-background-paper p-2 rounded-lg">
+<span class="material-symbols-outlined text-primary" style="font-variation-settings: 'FILL' 1;">directions_walk</span>
+</div>
+</div>
+</article>
+<!-- Trail Card 2 -->
+<article class="bg-white rounded-lg shadow-sm p-4 flex justify-between items-center">
+<div class="flex-1">
+<h2 class="font-bold text-lg text-on-surface leading-tight">Trolley Track Trail</h2>
+<div class="h-px bg-on-surface-variant/10 w-24 my-2"></div>
+<span class="inline-block px-3 py-0.5 bg-surface-paved text-white text-[10px] font-black tracking-wider rounded-full">PAVED</span>
+</div>
+<div class="flex items-center gap-4 text-right">
+<div class="space-y-0.5">
+<p class="text-xs text-on-surface-variant font-medium">3.1 mi</p>
+<p class="text-[10px] text-on-surface-variant/60">0.6 mi away</p>
+</div>
+<div class="bg-background-paper p-2 rounded-lg">
+<span class="material-symbols-outlined text-primary">directions_bike</span>
+</div>
+</div>
+</article>
+<!-- Trail Card 3 -->
+<article class="bg-white rounded-lg shadow-sm p-4 flex justify-between items-center">
+<div class="flex-1">
+<h2 class="font-bold text-lg text-on-surface leading-tight">Blue River Parkway Trail</h2>
+<div class="h-px bg-on-surface-variant/10 w-24 my-2"></div>
+<span class="inline-block px-3 py-0.5 bg-surface-gravel text-white text-[10px] font-black tracking-wider rounded-full">GRAVEL</span>
+</div>
+<div class="flex items-center gap-4 text-right">
+<div class="space-y-0.5">
+<p class="text-xs text-on-surface-variant font-medium">5.8 mi</p>
+<p class="text-[10px] text-on-surface-variant/60">1.2 mi away</p>
+</div>
+<div class="bg-background-paper p-2 rounded-lg">
+<span class="material-symbols-outlined text-primary">directions_bike</span>
+</div>
+</div>
+</article>
+<!-- Trail Card 4 -->
+<article class="bg-white rounded-lg shadow-sm p-4 flex justify-between items-center">
+<div class="flex-1">
+<h2 class="font-bold text-lg text-on-surface leading-tight">Indian Creek Greenway</h2>
+<div class="h-px bg-on-surface-variant/10 w-24 my-2"></div>
+<span class="inline-block px-3 py-0.5 bg-surface-paved text-white text-[10px] font-black tracking-wider rounded-full">PAVED</span>
+</div>
+<div class="flex items-center gap-4 text-right">
+<div class="space-y-0.5">
+<p class="text-xs text-on-surface-variant font-medium">4.0 mi</p>
+<p class="text-[10px] text-on-surface-variant/60">1.5 mi away</p>
+</div>
+<div class="bg-background-paper p-2 rounded-lg">
+<span class="material-symbols-outlined text-primary" style="font-variation-settings: 'FILL' 1;">directions_walk</span>
+</div>
+</div>
+</article>
+<!-- Trail Card 5 -->
+<article class="bg-white rounded-lg shadow-sm p-4 flex justify-between items-center">
+<div class="flex-1">
+<h2 class="font-bold text-lg text-on-surface leading-tight">Shawnee Mission Park Trails</h2>
+<div class="h-px bg-on-surface-variant/10 w-24 my-2"></div>
+<span class="inline-block px-3 py-0.5 bg-surface-dirt text-white text-[10px] font-black tracking-wider rounded-full">DIRT</span>
+</div>
+<div class="flex items-center gap-4 text-right">
+<div class="space-y-0.5">
+<p class="text-xs text-on-surface-variant font-medium">6.5 mi</p>
+<p class="text-[10px] text-on-surface-variant/60">2.1 mi away</p>
+</div>
+<div class="bg-background-paper p-2 rounded-lg">
+<span class="material-symbols-outlined text-primary">directions_bike</span>
+</div>
+</div>
+</article>
+<!-- Trail Card 6 -->
+<article class="bg-white rounded-lg shadow-sm p-4 flex justify-between items-center">
+<div class="flex-1">
+<h2 class="font-bold text-lg text-on-surface leading-tight">Line Creek Trail</h2>
+<div class="h-px bg-on-surface-variant/10 w-24 my-2"></div>
+<span class="inline-block px-3 py-0.5 bg-surface-gravel text-white text-[10px] font-black tracking-wider rounded-full">GRAVEL</span>
+</div>
+<div class="flex items-center gap-4 text-right">
+<div class="space-y-0.5">
+<p class="text-xs text-on-surface-variant font-medium">2.9 mi</p>
+<p class="text-[10px] text-on-surface-variant/60">2.8 mi away</p>
+</div>
+<div class="bg-background-paper p-2 rounded-lg">
+<span class="material-symbols-outlined text-primary" style="font-variation-settings: 'FILL' 1;">directions_walk</span>
+</div>
+</div>
+</article>
+</main>
+<!-- BottomNavBar from Shared Components JSON -->
+<nav class="fixed bottom-0 w-full z-50 flex justify-around items-center h-20 pb-safe px-2 bg-white dark:bg-surface-container-high shadow-[0_-1px_3px_rgba(0,0,0,0.05)] shadow-lg rounded-t-xl">
+<!-- Map Tab -->
+<a class="flex flex-col items-center justify-center text-[#4A4D44] dark:text-on-surface-variant px-5 py-1 hover:bg-surface-variant/30 transition-transform duration-150 active:scale-95" href="#">
+<span class="material-symbols-outlined mb-1">map</span>
+<span class="font-label text-xs font-medium">Map</span>
+</a>
+<!-- List Tab (Active) -->
+<a class="flex flex-col items-center justify-center bg-[#2E7D32] text-white rounded-full px-5 py-1 transition-transform duration-150 active:scale-95" href="#">
+<span class="material-symbols-outlined mb-1" style="font-variation-settings: 'FILL' 1;">list_alt</span>
+<span class="font-label text-xs font-medium">List</span>
+</a>
+<!-- Saved Tab -->
+<a class="flex flex-col items-center justify-center text-[#4A4D44] dark:text-on-surface-variant px-5 py-1 hover:bg-surface-variant/30 transition-transform duration-150 active:scale-95" href="#">
+<span class="material-symbols-outlined mb-1">bookmark</span>
+<span class="font-label text-xs font-medium">Saved</span>
+</a>
+</nav>
+</body></html>

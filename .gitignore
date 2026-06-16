@@ -1,0 +1,29 @@
+# Keystores — never commit signing keys
+*.jks
+*.keystore
+*.p12
+
+# Android build
+mobile/.gradle/
+mobile/build/
+mobile/app/build/
+mobile/local.properties
+mobile/.kotlin/
+*.apk
+*.aab
+.cxx/
+
+# Env / secrets
+.env
+*.local
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.iml
+
+# Python (helper scripts, if any)
+__pycache__/
+*.py[cod]
+.venv/
