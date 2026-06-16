@@ -19,7 +19,10 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.DirectionsBike
 import androidx.compose.material.icons.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Forest
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -48,7 +51,11 @@ import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TrailListScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit) {
+fun TrailListScreen(
+    vm: TrailsViewModel,
+    onOpenTrail: (String) -> Unit,
+    onShowOnMap: () -> Unit,
+) {
     val ui by vm.state.collectAsStateWithLifecycle()
     val trails = ui.filtered
 
@@ -67,6 +74,19 @@ fun TrailListScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit) {
                             },
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { vm.setShowSavedOnly(!ui.showSavedOnly) }) {
+                        Icon(
+                            if (ui.showSavedOnly) Icons.Filled.Star else Icons.Filled.StarBorder,
+                            contentDescription = if (ui.showSavedOnly) "Showing saved only" else "Show saved only",
+                            tint = if (ui.showSavedOnly) {
+                                MaterialTheme.colorScheme.secondary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
                         )
                     }
                 },
@@ -111,7 +131,8 @@ fun TrailListScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit) {
                 }
                 trails.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
                     Text(
-                        ui.error ?: "No trails match your filters.",
+                        ui.error
+                            ?: if (ui.showSavedOnly) "No saved trails yet." else "No trails match your filters.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(24.dp),
@@ -122,9 +143,19 @@ fun TrailListScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit) {
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     ui.systems.forEach { system ->
-                        item(key = "hdr_${system.id}") { SystemHeader(system) }
+                        item(key = "hdr_${system.id}") {
+                            SystemHeader(system) {
+                                vm.focusOn(system.center)
+                                onShowOnMap()
+                            }
+                        }
                         items(system.trails, key = { it.id }) { trail ->
-                            TrailRow(trail) { onOpenTrail(trail.id) }
+                            TrailRow(
+                                trail = trail,
+                                isSaved = ui.isSaved(trail.id),
+                                onToggleSave = { vm.toggleSaved(trail.id) },
+                                onClick = { onOpenTrail(trail.id) },
+                            )
                         }
                     }
                 }
@@ -133,7 +164,12 @@ fun TrailListScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit) {
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     items(trails, key = { it.id }) { trail ->
-                        TrailRow(trail) { onOpenTrail(trail.id) }
+                        TrailRow(
+                            trail = trail,
+                            isSaved = ui.isSaved(trail.id),
+                            onToggleSave = { vm.toggleSaved(trail.id) },
+                            onClick = { onOpenTrail(trail.id) },
+                        )
                     }
                 }
             }
@@ -141,14 +177,15 @@ fun TrailListScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit) {
     }
 }
 
-/** Header card for a clustered trail system in MTB mode. */
+/** Header card for a clustered trail system in MTB mode. Tapping it recenters the map there. */
 @Composable
-private fun SystemHeader(system: TrailSystem) {
+private fun SystemHeader(system: TrailSystem, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -167,12 +204,19 @@ private fun SystemHeader(system: TrailSystem) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
-                "${system.trails.size} trails · %.1f mi".format(system.totalMiles),
+                "${system.trails.size} trails · %.1f mi · View on map".format(system.totalMiles),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         ScaleRangeChip(system.scaleMin, system.scaleMax)
+        Spacer(Modifier.size(8.dp))
+        Icon(
+            Icons.Filled.Map,
+            contentDescription = "View on map",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
     }
 }
 
@@ -198,13 +242,18 @@ private fun ScaleRangeChip(scaleMin: Int?, scaleMax: Int?) {
 }
 
 @Composable
-private fun TrailRow(trail: Trail, onClick: () -> Unit) {
+private fun TrailRow(
+    trail: Trail,
+    isSaved: Boolean,
+    onToggleSave: () -> Unit,
+    onClick: () -> Unit,
+) {
     Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Row(
-            Modifier.fillMaxWidth().padding(16.dp),
+            Modifier.fillMaxWidth().padding(start = 16.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(Modifier.weight(1f)) {
+            Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
                 Text(
                     trail.name,
                     style = MaterialTheme.typography.titleMedium,
@@ -215,7 +264,7 @@ private fun TrailRow(trail: Trail, onClick: () -> Unit) {
                     SurfaceBadge(trail.surface)
                     MtbBadge(trail.mtbScale)
                 }
-}
+            }
             Column(horizontalAlignment = Alignment.End) {
                 Text(
                     "%.1f mi".format(trail.lengthMiles),
@@ -229,6 +278,17 @@ private fun TrailRow(trail: Trail, onClick: () -> Unit) {
                 )
                 Spacer(Modifier.size(4.dp))
                 UseIcons(trail.uses)
+            }
+            IconButton(onClick = onToggleSave) {
+                Icon(
+                    if (isSaved) Icons.Filled.Star else Icons.Filled.StarBorder,
+                    contentDescription = if (isSaved) "Remove from saved" else "Save trail",
+                    tint = if (isSaved) {
+                        MaterialTheme.colorScheme.secondary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
             }
         }
     }

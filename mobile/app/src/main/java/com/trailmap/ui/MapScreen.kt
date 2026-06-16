@@ -2,6 +2,7 @@ package com.trailmap.ui
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -16,12 +17,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BrightnessAuto
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -47,6 +53,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.trailmap.data.SurfaceType
 import com.trailmap.data.Trail
+import com.trailmap.offline.OfflinePacks
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
@@ -70,12 +77,22 @@ private const val LAYER_TRAILS_CASING = "trails-line-casing"
 private const val EMPTY_FC = """{"type":"FeatureCollection","features":[]}"""
 private const val STYLE_LIGHT = "asset://osm_raster_style.json"
 private const val STYLE_DARK = "asset://carto_dark_style.json"
+// Live display uses the bundled asset styles above. MapLibre's OfflineManager can't read
+// asset://, so offline downloads point at the same style JSON hosted on the public repo.
+private const val STYLE_LIGHT_URL =
+    "https://raw.githubusercontent.com/Pr0zak/trailmap/main/mobile/app/src/main/assets/osm_raster_style.json"
+private const val STYLE_DARK_URL =
+    "https://raw.githubusercontent.com/Pr0zak/trailmap/main/mobile/app/src/main/assets/carto_dark_style.json"
 
 @SuppressLint("MissingPermission")
 @Composable
 fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit) {
     val ui by vm.state.collectAsStateWithLifecycle()
-    val dark = isSystemInDarkTheme()
+    val dark = when (ui.mapTheme) {
+        MapTheme.SYSTEM -> isSystemInDarkTheme()
+        MapTheme.LIGHT -> false
+        MapTheme.DARK -> true
+    }
 
     val mapRef = remember { mutableStateOf<MapLibreMap?>(null) }
     val styleRef = remember { mutableStateOf<Style?>(null) }
@@ -138,6 +155,17 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit) {
     // Redraw the trail lines whenever the filtered set changes (and the source exists).
     LaunchedEffect(ui.filtered, styleRef.value) {
         styleRef.value?.getSourceAs<GeoJsonSource>(SRC_TRAILS)?.setGeoJson(trailsFc(ui.filtered))
+    }
+
+    // One-shot: tapping a trail-system header focuses the map on that park, then clears it.
+    LaunchedEffect(ui.focusTarget) {
+        val target = ui.focusTarget ?: return@LaunchedEffect
+        mapRef.value?.animateCamera(
+            org.maplibre.android.camera.CameraUpdateFactory.newLatLngZoom(
+                LatLng(target.lat, target.lon), 14.0,
+            ),
+        )
+        vm.consumeFocus()
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -232,15 +260,50 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit) {
                 .padding(start = 8.dp),
         )
 
-        // my-location FAB
-        FloatingActionButton(
-            onClick = { vm.locateAndLoad() },
+        // right-edge controls: theme toggle, offline download, my-location
+        val context = androidx.compose.ui.platform.LocalContext.current
+        Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(end = 16.dp, bottom = 90.dp),
-            containerColor = MaterialTheme.colorScheme.primary,
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Icon(Icons.Filled.MyLocation, contentDescription = "My location")
+            SmallFloatingActionButton(
+                onClick = { vm.cycleMapTheme() },
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            ) {
+                Icon(
+                    when (ui.mapTheme) {
+                        MapTheme.SYSTEM -> Icons.Filled.BrightnessAuto
+                        MapTheme.LIGHT -> Icons.Filled.LightMode
+                        MapTheme.DARK -> Icons.Filled.DarkMode
+                    },
+                    contentDescription = "Map theme: ${ui.mapTheme.name.lowercase()}",
+                )
+            }
+            SmallFloatingActionButton(
+                onClick = {
+                    val map = mapRef.value
+                    if (map == null) {
+                        Toast.makeText(context, "Map not ready", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "Downloading this area for offline…", Toast.LENGTH_SHORT).show()
+                        OfflinePacks.downloadVisible(
+                            context, map, if (dark) STYLE_DARK_URL else STYLE_LIGHT_URL,
+                        ) { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
+                    }
+                },
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            ) {
+                Icon(Icons.Filled.CloudDownload, contentDescription = "Download area for offline")
+            }
+            FloatingActionButton(
+                onClick = { vm.locateAndLoad() },
+                containerColor = MaterialTheme.colorScheme.primary,
+            ) {
+                Icon(Icons.Filled.MyLocation, contentDescription = "My location")
+            }
         }
     }
 }

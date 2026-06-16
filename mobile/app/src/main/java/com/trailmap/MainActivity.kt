@@ -82,7 +82,17 @@ private fun TrailmapRoot() {
                 MapScreen(vm) { id -> nav.navigate("detail/$id") }
             }
             composable(Tab.List.route) {
-                TrailListScreen(vm) { id -> nav.navigate("detail/$id") }
+                TrailListScreen(
+                    vm,
+                    onOpenTrail = { id -> nav.navigate("detail/$id") },
+                    onShowOnMap = {
+                        nav.navigate(Tab.Map.route) {
+                            popUpTo(Tab.Map.route) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
+                )
             }
             composable("detail/{id}") { entry ->
                 val id = entry.arguments?.getString("id").orEmpty()

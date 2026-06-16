@@ -1,5 +1,8 @@
 package com.trailmap.ui
 
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +17,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -28,6 +35,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -39,8 +47,10 @@ import kotlin.math.roundToInt
 @Composable
 fun TrailDetailScreen(vm: TrailsViewModel, id: String, onBack: () -> Unit) {
     val trail = vm.trailById(id)
+    val ui by vm.state.collectAsStateWithLifecycle()
     val profiles by vm.profiles.collectAsStateWithLifecycle()
     val profile: ElevationProfile? = profiles[id]
+    val context = LocalContext.current
 
     LaunchedEffect(id) { vm.ensureProfile(id) }
 
@@ -51,6 +61,61 @@ fun TrailDetailScreen(vm: TrailsViewModel, id: String, onBack: () -> Unit) {
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    if (trail != null) {
+                        val saved = ui.isSaved(trail.id)
+                        IconButton(onClick = { vm.toggleSaved(trail.id) }) {
+                            Icon(
+                                if (saved) Icons.Filled.Star else Icons.Filled.StarBorder,
+                                contentDescription = if (saved) "Remove from saved" else "Save trail",
+                                tint = if (saved) {
+                                    MaterialTheme.colorScheme.secondary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        }
+                        IconButton(onClick = {
+                            val lat = trail.center.lat
+                            val lon = trail.center.lon
+                            val uri = Uri.parse(
+                                "geo:$lat,$lon?q=$lat,$lon(${Uri.encode(trail.name)})",
+                            )
+                            val intent = Intent(Intent.ACTION_VIEW, uri)
+                            try {
+                                context.startActivity(Intent.createChooser(intent, "Open in maps"))
+                            } catch (e: Exception) {
+                                Toast.makeText(
+                                    context,
+                                    "No map app available",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        }) {
+                            Icon(Icons.Filled.Map, contentDescription = "Open in maps")
+                        }
+                        IconButton(onClick = {
+                            val lat = trail.center.lat
+                            val lon = trail.center.lon
+                            val text = "${trail.name} — %.1f mi trail. ".format(trail.lengthMiles) +
+                                "https://www.google.com/maps?q=$lat,$lon"
+                            val intent = Intent(Intent.ACTION_SEND)
+                                .setType("text/plain")
+                                .putExtra(Intent.EXTRA_TEXT, text)
+                            try {
+                                context.startActivity(Intent.createChooser(intent, "Share trail"))
+                            } catch (e: Exception) {
+                                Toast.makeText(
+                                    context,
+                                    "Nothing to share with",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        }) {
+                            Icon(Icons.Filled.Share, contentDescription = "Share trail")
+                        }
                     }
                 },
             )
