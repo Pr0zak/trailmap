@@ -118,6 +118,7 @@ class OverpassClient(private val cacheDir: File? = null) {
             (
               way["highway"~"^(path|cycleway|track|bridleway)$"](around:$r,$lat,$lon);
               way["highway"="footway"]["footway"!~"sidewalk|crossing|traffic_island|access_aisle"](around:$r,$lat,$lon);
+              relation["route"="bicycle"](around:$r,$lat,$lon);
             );
             out geom;
         """.trimIndent()
@@ -282,8 +283,64 @@ class OverpassClient(private val cacheDir: File? = null) {
         val mtbScale: Int? = null,
     )
 
+    /**
+     * ALL-mode parsing: response contains both `way` and `relation` elements.
+     * Relations (route=bicycle — named bike routes/parkways) each become one trail;
+     * standalone ways are grouped by name. Ways already referenced by a relation are
+     * skipped to avoid double-listing a route's member ways.
+     */
     private fun buildTrails(elements: List<OverpassElement>, center: GeoPoint): List<Trail> {
-        val segments = elements.mapNotNull { el ->
+        val ways = elements.filter { it.type == "way" }
+        val relations = elements.filter { it.type == "relation" }
+
+        // Way ids already represented by a relation member — skip them as standalone.
+        val relationWayRefs = HashSet<Long>()
+        for (rel in relations) {
+            for (m in rel.members) if (m.type == "way") relationWayRefs.add(m.ref)
+        }
+
+        val trails = ArrayList<Trail>()
+
+        // --- Relations: one logical trail each (route=bicycle, skip nameless) ---
+        for (rel in relations) {
+            val name = trailName(rel.tags["name"]) ?: continue
+            val memberPaths = rel.members
+                .filter { it.type == "way" }
+                .map { m -> m.geometry.map { GeoPoint(it.lat, it.lon) } }
+                .filter { it.size >= 2 }
+            if (memberPaths.isEmpty()) continue
+
+            // Urban bikeways/parkways are typically paved; fall back to PAVED when untagged.
+            val relSurface = SurfaceType.fromOsmSurface(rel.tags["surface"])
+                .takeIf { it != SurfaceType.UNKNOWN } ?: SurfaceType.PAVED
+            val relUses = if (rel.tags["foot"] == "no") setOf(UseType.BIKE)
+            else setOf(UseType.BIKE, UseType.WALK)
+
+            val relMembers = memberPaths.map { pts ->
+                WaySegment(
+                    id = 0L,
+                    tags = emptyMap(),
+                    points = pts,
+                    surface = relSurface,
+                    uses = relUses,
+                    length = Geo.lengthMeters(pts),
+                    mtbScale = null,
+                )
+            }
+            trails.add(
+                assemble(
+                    id = "rel_${rel.id}",
+                    name = name,
+                    members = relMembers,
+                    center = center,
+                    mtbScale = null,
+                )
+            )
+        }
+
+        // --- Standalone ways: same parsing as before (skip relation members) ---
+        val segments = ways.mapNotNull { el ->
+            if (el.id in relationWayRefs) return@mapNotNull null
             val points = el.geometry.map { GeoPoint(it.lat, it.lon) }
             if (points.size < 2) return@mapNotNull null
             WaySegment(
@@ -305,7 +362,6 @@ class OverpassClient(private val cacheDir: File? = null) {
             else named.getOrPut(name) { ArrayList() }.add(seg)
         }
 
-        val trails = ArrayList<Trail>(named.size + unnamed.size)
         for ((name, members) in named) {
             trails.add(assemble(id = "name_" + slug(name), name = name, members = members, center = center))
         }

@@ -63,15 +63,15 @@ fun FilterChips(
                 label = { Text("MTB") },
             )
 
-            if (ui.mode == MapMode.MTB) {
-                val selectedRadius = ui.radiusMiles.roundToInt()
-                listOf(10, 25, 40).forEach { miles ->
-                    FilterChip(
-                        selected = selectedRadius == miles,
-                        onClick = { onSetRadiusMiles(miles) },
-                        label = { Text("$miles mi") },
-                    )
-                }
+            // Radius selector — both modes, with mode-appropriate ranges.
+            val selectedRadius = ui.radiusMiles.roundToInt()
+            val radii = if (ui.mode == MapMode.MTB) listOf(10, 25, 40) else listOf(3, 5, 10)
+            radii.forEach { miles ->
+                FilterChip(
+                    selected = selectedRadius == miles,
+                    onClick = { onSetRadiusMiles(miles) },
+                    label = { Text("$miles mi") },
+                )
             }
 
             // Min-length filter (both modes). label -> miles

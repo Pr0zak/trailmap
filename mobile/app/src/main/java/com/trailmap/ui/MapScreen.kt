@@ -74,6 +74,8 @@ import org.maplibre.android.style.sources.GeoJsonSource
 private const val SRC_TRAILS = "trails"
 private const val LAYER_TRAILS = "trails-line"
 private const val LAYER_TRAILS_CASING = "trails-line-casing"
+private const val SRC_HIGHLIGHT = "trail-highlight"
+private const val LAYER_HIGHLIGHT = "trail-highlight-line"
 private const val EMPTY_FC = """{"type":"FeatureCollection","features":[]}"""
 private const val STYLE_LIGHT = "asset://osm_raster_style.json"
 private const val STYLE_DARK = "asset://carto_dark_style.json"
@@ -157,6 +159,13 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit) {
         styleRef.value?.getSourceAs<GeoJsonSource>(SRC_TRAILS)?.setGeoJson(trailsFc(ui.filtered))
     }
 
+    // Highlight the selected trail (or clear the highlight when nothing is selected).
+    LaunchedEffect(ui.selectedTrailId, styleRef.value) {
+        val selected = ui.selectedTrailId?.let { vm.trailById(it) }
+        val fc = if (selected != null) trailsFc(listOf(selected)) else EMPTY_FC
+        styleRef.value?.getSourceAs<GeoJsonSource>(SRC_HIGHLIGHT)?.setGeoJson(fc)
+    }
+
     // One-shot: tapping a trail-system header focuses the map on that park, then clears it.
     LaunchedEffect(ui.focusTarget) {
         val target = ui.focusTarget ?: return@LaunchedEffect
@@ -177,13 +186,18 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit) {
                     getMapAsync { map ->
                         mapRef.value = map
                         map.addOnMapClickListener { ll ->
+                            // Query a padded box around the tap (not a single pixel) so tapping
+                            // NEAR a thin trail line still selects it.
                             val pt = map.projection.toScreenLocation(ll)
-                            val f = map.queryRenderedFeatures(pt, LAYER_TRAILS).firstOrNull()
+                            val tol = 30f
+                            val box = android.graphics.RectF(pt.x - tol, pt.y - tol, pt.x + tol, pt.y + tol)
+                            val f = map.queryRenderedFeatures(box, LAYER_TRAILS).firstOrNull()
                             val id = f?.takeIf { it.hasProperty("id") }?.getStringProperty("id")
                             if (id != null) {
-                                onOpenTrail(id)
+                                vm.selectTrail(id) // highlight + show the peek card
                                 true
                             } else {
+                                vm.clearSelection() // tap empty map → deselect
                                 false
                             }
                         }
@@ -239,11 +253,11 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit) {
             }
         }
 
-        // bottom peek card for the nearest trail (also the queryRenderedFeatures fallback)
-        ui.filtered.firstOrNull()?.let { nearest ->
+        // bottom peek card — only for the trail the user tapped (nothing auto-selected at startup)
+        ui.selectedTrailId?.let { vm.trailById(it) }?.let { selected ->
             NearestTrailCard(
-                trail = nearest,
-                onDetails = { onOpenTrail(nearest.id) },
+                trail = selected,
+                onDetails = { onOpenTrail(selected.id) },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
@@ -325,8 +339,8 @@ private fun MapLegend(mode: MapMode, dark: Boolean, modifier: Modifier = Modifie
         title = "Surface"
         items = listOf(
             Color((if (dark) 0xFF4CC57F else 0xFF2E7D4F).toInt()) to "Paved",
-            Color((if (dark) 0xFFE6B24A else 0xFFC9922B).toInt()) to "Gravel",
-            Color((if (dark) 0xFFC98E54 else 0xFF8A5A2B).toInt()) to "Dirt",
+            Color((if (dark) 0xFFF2C744 else 0xFFDAA520).toInt()) to "Gravel",
+            Color((if (dark) 0xFFCC7A4D else 0xFFA0522D).toInt()) to "Dirt",
         )
     }
     Surface(
@@ -397,15 +411,26 @@ private fun NearestTrailCard(trail: Trail, onDetails: () -> Unit, modifier: Modi
     }
 }
 
-/** Add the trail source plus a casing layer (underneath) + the colored line layer on top. */
+/** Add the highlight glow + casing + colored line layers (bottom→top order). */
 private fun applyTrailLayers(style: Style, dark: Boolean) {
     style.addSource(GeoJsonSource(SRC_TRAILS, EMPTY_FC))
-    // Casing = a wider line drawn underneath. A dark outline on the light basemap and a
-    // light halo on the dark basemap make the colored lines pop on either background.
+    style.addSource(GeoJsonSource(SRC_HIGHLIGHT, EMPTY_FC))
+    // Highlight glow for the selected trail — widest, drawn underneath everything so it
+    // halos around the colored line. Bright yellow reads on both light + dark basemaps.
+    style.addLayer(
+        LineLayer(LAYER_HIGHLIGHT, SRC_HIGHLIGHT).withProperties(
+            PropertyFactory.lineWidth(lineWidthExpr(7f)),
+            PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+            PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
+            PropertyFactory.lineColor(0xF0FFD54F.toInt()),
+        ),
+    )
+    // Casing = a wider line drawn underneath the colored line. A dark outline on the light
+    // basemap and a light halo on the dark basemap make the colored lines pop on either.
     val casing = if (dark) 0x66FFFFFF.toInt() else 0x55000000.toInt()
     style.addLayer(
         LineLayer(LAYER_TRAILS_CASING, SRC_TRAILS).withProperties(
-            PropertyFactory.lineWidth(lineWidthExpr(casing = true)),
+            PropertyFactory.lineWidth(lineWidthExpr(2f)),
             PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
             PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
             PropertyFactory.lineColor(casing),
@@ -422,18 +447,16 @@ private fun applyTrailLayers(style: Style, dark: Boolean) {
 }
 
 // Zoom-interpolated stroke width: thin when zoomed out (so dense trail networks don't
-// merge into blobs), wider when zoomed in. Casing adds a couple px so it peeks out.
-private fun lineWidthExpr(casing: Boolean = false): Expression {
-    val b = if (casing) 2.0f else 0.0f
-    return Expression.interpolate(
+// merge into blobs), wider when zoomed in. [extra] widens it (casing peeks out; highlight glows).
+private fun lineWidthExpr(extra: Float = 0f): Expression =
+    Expression.interpolate(
         Expression.exponential(1.4f),
         Expression.zoom(),
-        Expression.stop(10, 1.0f + b),
-        Expression.stop(13, 2.0f + b),
-        Expression.stop(16, 4.5f + b),
-        Expression.stop(19, 8.0f + b),
+        Expression.stop(10, 1.0f + extra),
+        Expression.stop(13, 2.0f + extra),
+        Expression.stop(16, 4.5f + extra),
+        Expression.stop(19, 8.0f + extra),
     )
-}
 
 /**
  * Combined line color: MTB-rated trails (the "mtb" prop is "0".."6") are colored by
@@ -455,8 +478,8 @@ private fun trailColorExpr(dark: Boolean): Expression = Expression.match(
 /** Data-driven line color by "surface", brightened on the dark basemap for contrast. */
 private fun surfaceColorExpr(dark: Boolean): Expression {
     val paved = if (dark) 0xFF4CC57F else 0xFF2E7D4F
-    val gravel = if (dark) 0xFFE6B24A else 0xFFC9922B
-    val dirt = if (dark) 0xFFC98E54 else 0xFF8A5A2B
+    val gravel = if (dark) 0xFFF2C744 else 0xFFDAA520  // gold
+    val dirt = if (dark) 0xFFCC7A4D else 0xFFA0522D    // sienna
     val unknown = if (dark) 0xFFB6B6B6 else 0xFF7A7A7A
     return Expression.match(
         Expression.get("surface"),

@@ -7,9 +7,9 @@ data class GeoPoint(val lat: Double, val lon: Double)
 
 /** Surface buckets we render + filter by. Raw OSM surface=* values map into these. */
 enum class SurfaceType(val label: String, val color: Color) {
-    PAVED("Paved", Color(0xFF2E7D4F)),
-    GRAVEL("Gravel", Color(0xFFC9922B)),
-    DIRT("Dirt", Color(0xFF8A5A2B)),
+    PAVED("Paved", Color(0xFF2E7D4F)),   // green
+    GRAVEL("Gravel", Color(0xFFDAA520)), // goldenrod — distinct gold/yellow
+    DIRT("Dirt", Color(0xFFA0522D)),     // sienna — distinct red-brown
     UNKNOWN("Unknown", Color(0xFF7A7A7A));
 
     companion object {

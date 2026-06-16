@@ -20,7 +20,8 @@ Single-user, personal. App-only (no backend): the phone talks to OpenStreetMap +
 - Kotlin 2.0.20, AGP 8.5.2, compileSdk 35, minSdk 26. App module under `mobile/`.
 
 ## Modes & filters (TrailsViewModel.TrailsUiState)
-- **MapMode.ALL** — generic trails within a 5 km radius (paved/gravel/dirt), the "around me" view.
+- **MapMode.ALL** — paved/gravel/dirt trails, default ~5 mi radius, selectable **3 / 5 / 10 mi**. Includes OSM `route=bicycle` RELATIONS (named bikeways/parkways like the Paseo Bikeway), not just ways — without these, ~⅔ of named bike routes near KC were missing.
+- **Trail selection:** tapping the map selects the nearest trail (a padded box query, so taps *near* a thin line register) → shows a peek card + a yellow highlight glow layer. Nothing is auto-selected at startup. The list / system headers drive the map separately.
 - **MapMode.MTB** — mountain-bike trails only, default 25 mi radius, selectable **10 / 25 / 40 mi**. Shows OSM `mtb:scale` difficulty badges (S0 Beginner → S6 Extreme, `MtbDifficulty`). The Trails list **clusters** trails into systems/parks (`clusterTrailSystems`, union-find by ~2.5 km centroid proximity) under headers, **named after the enclosing OSM park** (a second `leisure=park|nature_reserve|…` / `boundary=protected_area` query + point-in-polygon on each trail's center → e.g. "Kessler Park", "Swope Park"); falls back to the member-name common prefix, else the longest member, when no park contains them. Map lines are colored by difficulty (rated) or surface (unrated). A **legend** card keys the colors (difficulty in MTB, surface in ALL).
 - **Filters** (apply to map + list, via `.filtered`): surface chips (paved/gravel/dirt), use chips (walk/bike), **min-length** (Any/1+/3+/5+/10+ mi), **name search** (substring), and a permanent **named-only** filter (drops "Unnamed path" connectors).
 - **Dark mode**: the basemap follows the system theme — light = OSM raster, dark = CARTO dark; surface line colors brighten on dark and every line gets a casing so it pops on either basemap. A **map theme toggle** FAB (BrightnessAuto → Light → Dark, persisted in `Prefs`) overrides the system theme.
@@ -50,7 +51,7 @@ ui/
   TrailListScreen.kt  search box + filter chips + list sorted by distance; SurfaceBadge / MtbBadge / UseIcons live here (reused)
   TrailDetailScreen.kt name, surface + MTB badge, stat cards, ElevationChart
   FilterChips.kt      mode toggle + radius + length + surface + use chips
-  ElevationChart.kt / theme/  "Trailhead" palette (green=paved, tan=gravel, brown=dirt)
+  ElevationChart.kt / theme/  "Trailhead" palette. Surface colors: green=paved, GOLD(#DAA520)=gravel, SIENNA(#A0522D)=dirt (gold vs sienna chosen to be clearly distinct; gravel/brown were too similar)
 MainActivity.kt       bottom-nav (Map / Trails) + detail route. NOTE: trail ids use `_` separators (name_<slug>, way_<id>, rel_<id>) — NOT `/`, which breaks the `detail/{id}` nav route.
 assets/osm_raster_style.json   keyless OSM raster (light)   |   assets/carto_dark_style.json  CARTO dark raster (dark mode)
 design/mockups/       Stitch "Trailhead" mockups (map/filters/list/detail .png + .html)

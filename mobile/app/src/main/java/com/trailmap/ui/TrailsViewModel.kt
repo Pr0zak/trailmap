@@ -43,6 +43,8 @@ data class TrailsUiState(
     val mapTheme: MapTheme = MapTheme.SYSTEM,
     /** When set, the map recenters here (e.g. tapping a trail-system header); consume after use. */
     val focusTarget: GeoPoint? = null,
+    /** The trail the user tapped on the map (peek card + highlight); null = nothing selected. */
+    val selectedTrailId: String? = null,
 ) {
     val radiusMiles: Double get() = radiusMeters / 1609.344
 
@@ -73,6 +75,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _state = MutableStateFlow(
         TrailsUiState(
+            radiusMeters = 8000, // ALL mode default ~5 mi (wide enough to catch parkway/bike routes)
             savedIds = prefs.savedIds(),
             mapTheme = runCatching { MapTheme.valueOf(prefs.mapTheme()) }.getOrDefault(MapTheme.SYSTEM),
         ),
@@ -105,7 +108,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(loading = true, error = null, center = center, radiusMeters = radiusMeters) }
             try {
                 val trails = overpass.fetchTrails(center, radiusMeters, mtb = mtb, forceRefresh = force)
-                _state.update { it.copy(loading = false, trails = trails) }
+                _state.update { it.copy(loading = false, trails = trails, selectedTrailId = null) }
             } catch (e: Exception) {
                 _state.update { it.copy(loading = false, error = e.message ?: "Failed to load trails") }
             }
@@ -120,13 +123,18 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     /** Radius selector in miles (used by MTB mode: 10 / 25 / 40 mi). */
     fun setRadiusMiles(miles: Int) = setRadius((miles * 1609.344).toInt())
 
-    /** Switch ALL ↔ MTB. MTB defaults to a wide 25-mi radius; ALL returns to the local 5 km. */
+    /** Switch ALL ↔ MTB. MTB defaults to a wide 25-mi radius; ALL to ~5 mi. */
     fun setMode(mode: MapMode) {
         if (_state.value.mode == mode) return
-        val radius = if (mode == MapMode.MTB) (25 * 1609.344).toInt() else 5000
-        _state.update { it.copy(mode = mode, radiusMeters = radius) }
+        val radius = if (mode == MapMode.MTB) (25 * 1609.344).toInt() else 8000
+        _state.update { it.copy(mode = mode, radiusMeters = radius, selectedTrailId = null) }
         load(_state.value.center, radius)
     }
+
+    /** Select a trail (tapped on the map) → peek card + map highlight. */
+    fun selectTrail(id: String) = _state.update { it.copy(selectedTrailId = id) }
+
+    fun clearSelection() = _state.update { it.copy(selectedTrailId = null) }
 
     /** Minimum-length filter in miles (0 = any). */
     fun setMinLength(miles: Double) = _state.update { it.copy(minLengthMiles = miles) }
