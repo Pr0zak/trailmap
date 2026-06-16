@@ -73,7 +73,8 @@ class OverpassClient(private val cacheDir: File? = null) {
      */
     private fun cacheFile(kind: String, center: GeoPoint, radiusMeters: Int): File? {
         val dir = cacheDir ?: return null
-        val key = "%s_%.3f_%.3f_%d".format(kind, center.lat, center.lon, radiusMeters)
+        // CACHE_SCHEMA bumps whenever the queries change, invalidating stale cached responses.
+        val key = "%s_%s_%.3f_%.3f_%d".format(CACHE_SCHEMA, kind, center.lat, center.lon, radiusMeters)
         return File(File(dir, "overpass").apply { mkdirs() }, "$key.json")
     }
 
@@ -118,7 +119,6 @@ class OverpassClient(private val cacheDir: File? = null) {
             (
               way["highway"~"^(path|cycleway|track|bridleway)$"](around:$r,$lat,$lon);
               way["highway"="footway"]["footway"!~"sidewalk|crossing|traffic_island|access_aisle"](around:$r,$lat,$lon);
-              relation["route"="bicycle"](around:$r,$lat,$lon);
             );
             out geom;
         """.trimIndent()
@@ -576,6 +576,8 @@ class OverpassClient(private val cacheDir: File? = null) {
             .ifBlank { "trail" }
 
     private companion object {
+        /** Bump when the Overpass queries change so old cached responses are ignored. */
+        const val CACHE_SCHEMA = "v2"
         /** Disk-cache freshness window: 7 days. */
         val CACHE_TTL_MS = TimeUnit.DAYS.toMillis(7)
         val BICYCLE_ALLOWED = setOf("yes", "designated", "permissive")
