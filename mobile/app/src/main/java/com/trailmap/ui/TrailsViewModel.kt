@@ -54,7 +54,7 @@ data class TrailsUiState(
 }
 
 class TrailsViewModel(app: Application) : AndroidViewModel(app) {
-    private val overpass = OverpassClient()
+    private val overpass = OverpassClient(app.cacheDir)
     private val elevation = ElevationClient()
     private val locator = Locator(app)
 
@@ -72,16 +72,21 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val here = locator.current()
             _state.update { it.copy(center = here) }
-            load(here, _state.value.radiusMeters)
+            // Explicit "my location" tap → refresh from network, bypassing the cache.
+            load(here, _state.value.radiusMeters, force = true)
         }
     }
 
-    fun load(center: GeoPoint = _state.value.center, radiusMeters: Int = _state.value.radiusMeters) {
+    fun load(
+        center: GeoPoint = _state.value.center,
+        radiusMeters: Int = _state.value.radiusMeters,
+        force: Boolean = false,
+    ) {
         val mtb = _state.value.mode == MapMode.MTB
         viewModelScope.launch {
             _state.update { it.copy(loading = true, error = null, center = center, radiusMeters = radiusMeters) }
             try {
-                val trails = overpass.fetchTrails(center, radiusMeters, mtb = mtb)
+                val trails = overpass.fetchTrails(center, radiusMeters, mtb = mtb, forceRefresh = force)
                 _state.update { it.copy(loading = false, trails = trails) }
             } catch (e: Exception) {
                 _state.update { it.copy(loading = false, error = e.message ?: "Failed to load trails") }

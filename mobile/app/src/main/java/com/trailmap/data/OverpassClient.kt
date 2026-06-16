@@ -7,6 +7,7 @@ import kotlinx.serialization.json.Json
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
@@ -14,8 +15,12 @@ import java.util.concurrent.TimeUnit
  * Fetches OSM trail ways from the public Overpass API and groups them into
  * logical [Trail]s. The query deliberately excludes sidewalk/crossing footways
  * (which otherwise drown the result in ~25k urban-pavement ways).
+ *
+ * When [cacheDir] is non-null, raw Overpass responses are cached on disk under
+ * `<cacheDir>/overpass`. Repeat loads of an area are served from disk (instant,
+ * no network) and, if the network fails, a stale cached copy is returned.
  */
-class OverpassClient {
+class OverpassClient(private val cacheDir: File? = null) {
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -26,24 +31,82 @@ class OverpassClient {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    suspend fun fetchTrails(center: GeoPoint, radiusMeters: Int, mtb: Boolean = false): List<Trail> =
+    suspend fun fetchTrails(
+        center: GeoPoint,
+        radiusMeters: Int,
+        mtb: Boolean = false,
+        forceRefresh: Boolean = false,
+    ): List<Trail> =
         withContext(Dispatchers.IO) {
             if (mtb) {
                 // Sequential (one Overpass request at a time) — firing both at once trips the
                 // public server's per-IP rate limit (429). Parks are best-effort.
-                val response = fetchAndParse(buildMtbQuery(center, radiusMeters))
-                val parks = runCatching { fetchParks(center, radiusMeters) }.getOrElse { emptyList() }
+                val trailsRaw = cachedRaw("mtb", center, radiusMeters, forceRefresh) {
+                    post(buildMtbQuery(center, radiusMeters))
+                }
+                val response = parseResponse(trailsRaw)
+                val parks = runCatching {
+                    val parksRaw = cachedRaw("parks", center, radiusMeters, forceRefresh) {
+                        post(buildParkQuery(center, radiusMeters))
+                    }
+                    parseParks(parksRaw)
+                }.getOrElse { emptyList() }
                 buildMtbTrails(response.elements, center, parks)
             } else {
-                buildTrails(fetchAndParse(buildQuery(center, radiusMeters)).elements, center)
+                val raw = cachedRaw("all", center, radiusMeters, forceRefresh) {
+                    post(buildQuery(center, radiusMeters))
+                }
+                buildTrails(parseResponse(raw).elements, center)
             }
         }
 
-    private fun fetchAndParse(query: String): OverpassResponse {
-        val raw = runCatching { post(query) }
-            .getOrElse { throw Exception("Overpass request failed: ${it.message}", it) }
-        return runCatching { json.decodeFromString<OverpassResponse>(raw) }
+    private fun parseResponse(raw: String): OverpassResponse =
+        runCatching { json.decodeFromString<OverpassResponse>(raw) }
             .getOrElse { throw Exception("Overpass parse failed: ${it.message}", it) }
+
+    // --- Disk cache ---------------------------------------------------------
+
+    /**
+     * Resolve the cache file for a given (kind, center, radius). Returns null when no
+     * [cacheDir] is configured. Center is rounded to 3 decimals (~100 m) so small GPS
+     * jitter reuses the same cache entry — fine for area-level trail discovery.
+     */
+    private fun cacheFile(kind: String, center: GeoPoint, radiusMeters: Int): File? {
+        val dir = cacheDir ?: return null
+        val key = "%s_%.3f_%.3f_%d".format(kind, center.lat, center.lon, radiusMeters)
+        return File(File(dir, "overpass").apply { mkdirs() }, "$key.json")
+    }
+
+    /**
+     * Cache-first wrapper around a network [fetch]:
+     *  - fresh (< 7-day TTL) cache file & not [forceRefresh] → return it, no network.
+     *  - otherwise fetch; on success write-through to the cache file (best-effort).
+     *  - on fetch failure → fall back to any existing cache file (even if stale),
+     *    so the app survives 429s / offline; if there's no cache, rethrow.
+     */
+    private fun cachedRaw(
+        kind: String,
+        center: GeoPoint,
+        radiusMeters: Int,
+        forceRefresh: Boolean,
+        fetch: () -> String,
+    ): String {
+        val file = cacheFile(kind, center, radiusMeters)
+
+        if (!forceRefresh && file != null && file.exists() &&
+            System.currentTimeMillis() - file.lastModified() < CACHE_TTL_MS
+        ) {
+            return file.readText()
+        }
+
+        return try {
+            val raw = fetch()
+            if (file != null) runCatching { file.writeText(raw) } // best-effort write-through
+            raw
+        } catch (e: Exception) {
+            if (file != null && file.exists()) file.readText() // stale fallback
+            else throw e
+        }
     }
 
     private fun buildQuery(center: GeoPoint, radiusMeters: Int): String {
@@ -92,9 +155,8 @@ class OverpassClient {
         """.trimIndent()
     }
 
-    /** Fetch + parse named park polygons. Returns empty on any failure. */
-    private fun fetchParks(center: GeoPoint, radiusMeters: Int): List<Park> {
-        val raw = post(buildParkQuery(center, radiusMeters))
+    /** Parse named park polygons from a raw Overpass response string. */
+    private fun parseParks(raw: String): List<Park> {
         val response = json.decodeFromString<OverpassResponse>(raw)
         val parks = ArrayList<Park>()
         for (el in response.elements) {
@@ -458,6 +520,8 @@ class OverpassClient {
             .ifBlank { "trail" }
 
     private companion object {
+        /** Disk-cache freshness window: 7 days. */
+        val CACHE_TTL_MS = TimeUnit.DAYS.toMillis(7)
         val BICYCLE_ALLOWED = setOf("yes", "designated", "permissive")
         val FOOT_ALLOWED = setOf("yes", "designated", "permissive")
         val WALK_HIGHWAYS = setOf("path", "footway", "track", "bridleway")
