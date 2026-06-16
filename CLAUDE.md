@@ -4,6 +4,9 @@ Personal Android app (Pixel 9a) that shows nearby walking/biking trails — pave
 on a map, colored by surface. Test location: **Kansas City** (39.0997, -94.5786).
 Single-user, personal. App-only (no backend): the phone talks to OpenStreetMap + elevation APIs directly.
 
+## Self-update (in-app)
+`update/UpdateChecker.kt` polls the **GitHub Releases API** (`/repos/Pr0zak/trailmap/releases/latest`) on launch, compares the `app-v*` tag to `BuildConfig.VERSION_NAME`, and if newer shows a dialog (in `MainActivity.UpdateGate`) → downloads the APK to externalCache → installs via FileProvider + `ACTION_VIEW` (needs `REQUEST_INSTALL_PACKAGES` + the `${applicationId}.fileprovider` provider). `versionName` defaults to the repo `VERSION` file locally (CI overrides with `-Pversion.name` from the tag). **Testing caveat:** a debug-signed build can't install a release-signed downloaded APK (signature mismatch) — the installer launches but the final install fails; production is release→release (same keystore) so it works. To test the *prompt+download*, build debug with `-Pversion.name=0.1.0` so it sees the latest release as newer.
+
 ## Repo & releases
 - GitHub: **`Pr0zak/trailmap`** (public). `main` branch. Commit identity is the non-personal `Pr0zak <pr0zak@users.noreply.github.com>`.
 - CI (`.github/workflows/ci.yml`): builds the debug APK on every push/PR.

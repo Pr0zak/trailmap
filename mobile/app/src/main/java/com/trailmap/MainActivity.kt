@@ -8,15 +8,27 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Map
+import android.widget.Toast
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.trailmap.update.UpdateChecker
+import com.trailmap.update.UpdateInfo
+import kotlinx.coroutines.launch
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -100,4 +112,48 @@ private fun TrailmapRoot() {
             }
         }
     }
+
+    UpdateGate()
+}
+
+/** On launch, polls GitHub Releases; if a newer APK exists, offers to download + install it. */
+@Composable
+private fun UpdateGate() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var update by remember { mutableStateOf<UpdateInfo?>(null) }
+    var busy by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) { update = UpdateChecker.check() }
+
+    val info = update ?: return
+    AlertDialog(
+        onDismissRequest = { if (!busy) update = null },
+        title = { Text("Update available") },
+        text = {
+            Text("trailmap ${info.version} is available — you have ${UpdateChecker.currentVersion()}.")
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !busy,
+                onClick = {
+                    busy = true
+                    scope.launch {
+                        try {
+                            val apk = UpdateChecker.downloadApk(context, info.apkUrl)
+                            UpdateChecker.install(context, apk)
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Update failed: ${e.message}", Toast.LENGTH_LONG).show()
+                        } finally {
+                            busy = false
+                            update = null
+                        }
+                    }
+                },
+            ) { Text(if (busy) "Downloading…" else "Download & install") }
+        },
+        dismissButton = {
+            TextButton(enabled = !busy, onClick = { update = null }) { Text("Later") }
+        },
+    )
 }
