@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BrightnessAuto
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.LightMode
@@ -26,6 +27,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
@@ -254,14 +256,16 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit) {
         }
 
         // bottom peek card — only for the trail the user tapped (nothing auto-selected at startup)
-        ui.selectedTrailId?.let { vm.trailById(it) }?.let { selected ->
+        val selectedTrail = ui.selectedTrailId?.let { vm.trailById(it) }
+        if (selectedTrail != null) {
             NearestTrailCard(
-                trail = selected,
-                onDetails = { onOpenTrail(selected.id) },
+                trail = selectedTrail,
+                onDetails = { onOpenTrail(selectedTrail.id) },
+                onClose = { vm.clearSelection() },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .padding(start = 12.dp, end = 12.dp, bottom = 90.dp),
+                    .padding(start = 12.dp, end = 12.dp, bottom = 40.dp), // clears the MapLibre attribution
             )
         }
 
@@ -274,12 +278,13 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit) {
                 .padding(start = 8.dp),
         )
 
-        // right-edge controls: theme toggle, offline download, my-location
+        // right-edge controls: theme toggle, offline download, my-location.
+        // Lift them above the peek card when one is showing so nothing overlaps.
         val context = androidx.compose.ui.platform.LocalContext.current
         Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 90.dp),
+                .padding(end = 16.dp, bottom = if (selectedTrail != null) 160.dp else 28.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -380,7 +385,12 @@ private fun MapLegend(mode: MapMode, dark: Boolean, modifier: Modifier = Modifie
 }
 
 @Composable
-private fun NearestTrailCard(trail: Trail, onDetails: () -> Unit, modifier: Modifier) {
+private fun NearestTrailCard(
+    trail: Trail,
+    onDetails: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier,
+) {
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(16.dp),
@@ -389,14 +399,21 @@ private fun NearestTrailCard(trail: Trail, onDetails: () -> Unit, modifier: Modi
         shadowElevation = 6.dp,
     ) {
         Row(
-            Modifier.padding(16.dp),
+            Modifier.padding(start = 16.dp, top = 8.dp, bottom = 12.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text(trail.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    trail.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                )
                 Spacer(Modifier.size(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     SurfaceBadge(trail.surface)
+                    MtbBadge(trail.mtbScale, Modifier.padding(start = 6.dp))
                     Spacer(Modifier.size(8.dp))
                     Text(
                         "%.1f mi · %.1f mi away".format(trail.lengthMiles, trail.distanceMiles),
@@ -407,6 +424,9 @@ private fun NearestTrailCard(trail: Trail, onDetails: () -> Unit, modifier: Modi
             }
             Spacer(Modifier.size(8.dp))
             Button(onClick = onDetails) { Text("Details") }
+            IconButton(onClick = onClose) {
+                Icon(Icons.Filled.Close, contentDescription = "Dismiss")
+            }
         }
     }
 }
