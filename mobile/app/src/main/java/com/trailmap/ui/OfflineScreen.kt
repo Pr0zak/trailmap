@@ -13,6 +13,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -207,6 +208,10 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit) {
             items(areas, key = { it.region.id }) { area ->
                 AreaRow(
                     area = area,
+                    onRetry = {
+                        OfflinePacks.retry(area) { }
+                        refresh()
+                    },
                     onDelete = {
                         OfflinePacks.delete(area) { refresh() }
                     },
@@ -219,7 +224,7 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit) {
 }
 
 @Composable
-private fun AreaRow(area: OfflineArea, onDelete: () -> Unit) {
+private fun AreaRow(area: OfflineArea, onRetry: () -> Unit, onDelete: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
@@ -247,6 +252,11 @@ private fun AreaRow(area: OfflineArea, onDelete: () -> Unit) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+            }
+            if (!area.complete) {
+                IconButton(onClick = onRetry) {
+                    Icon(Icons.Filled.Refresh, contentDescription = "Retry ${area.name}")
                 }
             }
             IconButton(onClick = onDelete) {

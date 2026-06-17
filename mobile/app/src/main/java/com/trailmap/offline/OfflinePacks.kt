@@ -43,6 +43,9 @@ object OfflinePacks {
     private const val DARK_STYLE =
         "https://raw.githubusercontent.com/Pr0zak/trailmap/main/mobile/app/src/main/assets/carto_dark_style.json"
 
+    private const val MAX_RETRIES = 4
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+
     /** Hosted raster style URL for the active theme (offline downloader needs http(s), not asset://). */
     fun styleUrl(dark: Boolean): String = if (dark) DARK_STYLE else LIGHT_STYLE
 
@@ -156,36 +159,70 @@ object OfflinePacks {
                     }
 
                     override fun onCreate(region: OfflineRegion) {
-                        var lastPercent = -1
-                        region.setObserver(object : OfflineRegion.OfflineRegionObserver {
-                            override fun onStatusChanged(status: OfflineRegionStatus) {
-                                if (status.isComplete) {
-                                    onUpdate("Ready (${status.completedTileCount} tiles)")
-                                    region.setDownloadState(OfflineRegion.STATE_INACTIVE)
-                                    return
-                                }
-                                val percent = percentOf(status)
-                                if (percent != lastPercent) {
-                                    lastPercent = percent
-                                    onUpdate("Downloading… $percent%")
-                                }
-                            }
-
-                            override fun onError(error: OfflineRegionError) {
-                                onUpdate("Download error: ${error.reason}")
-                            }
-
-                            override fun mapboxTileCountLimitExceeded(limit: Long) {
-                                onUpdate("Area too large (over $limit-tile limit) — pick a smaller area")
-                            }
-                        })
-                        region.setDownloadState(OfflineRegion.STATE_ACTIVE)
+                        observeAndStart(region, onUpdate)
                     }
                 },
             )
         } catch (e: Exception) {
             onUpdate("Download error: ${e.message}")
         }
+    }
+
+    /** Resume a stalled/incomplete region (manual "Retry" in the list). */
+    fun retry(area: OfflineArea, onUpdate: (String) -> Unit) {
+        onUpdate("Resuming…")
+        observeAndStart(area.region, onUpdate)
+    }
+
+    /**
+     * Observe a region's progress and start it, with **auto-retry on transient errors**:
+     * a network error re-activates the download after a backoff (up to [MAX_RETRIES]); any tile
+     * progress resets the budget. After the budget is spent it stops and leaves the area resumable
+     * via [retry]. Tile-count-limit and completion are terminal.
+     */
+    private fun observeAndStart(region: OfflineRegion, onUpdate: (String) -> Unit) {
+        var lastPercent = -1
+        var lastCompleted = -1L
+        var retries = 0
+        region.setObserver(object : OfflineRegion.OfflineRegionObserver {
+            override fun onStatusChanged(status: OfflineRegionStatus) {
+                if (status.completedTileCount > lastCompleted) {
+                    lastCompleted = status.completedTileCount
+                    retries = 0 // making progress → refill the retry budget
+                }
+                if (status.isComplete) {
+                    onUpdate("Ready (${status.completedTileCount} tiles)")
+                    region.setDownloadState(OfflineRegion.STATE_INACTIVE)
+                    return
+                }
+                val percent = percentOf(status)
+                if (percent != lastPercent) {
+                    lastPercent = percent
+                    onUpdate("Downloading… $percent%")
+                }
+            }
+
+            override fun onError(error: OfflineRegionError) {
+                if (retries < MAX_RETRIES) {
+                    retries++
+                    onUpdate("Network error — retrying ($retries/$MAX_RETRIES)…")
+                    // exponential-ish backoff; re-activating resumes any tiles that failed.
+                    handler.postDelayed(
+                        { region.setDownloadState(OfflineRegion.STATE_ACTIVE) },
+                        2000L * retries,
+                    )
+                } else {
+                    onUpdate("Download failed (${error.reason}) — tap Retry to resume")
+                    region.setDownloadState(OfflineRegion.STATE_INACTIVE)
+                }
+            }
+
+            override fun mapboxTileCountLimitExceeded(limit: Long) {
+                onUpdate("Area too large (over $limit-tile limit) — pick a smaller area")
+                region.setDownloadState(OfflineRegion.STATE_INACTIVE)
+            }
+        })
+        region.setDownloadState(OfflineRegion.STATE_ACTIVE)
     }
 
     /** Delete one region (and its cached tiles). [onDone] fires on the main thread when finished. */
