@@ -9,7 +9,10 @@ import com.trailmap.data.GeoPoint
 import com.trailmap.data.Locator
 import com.trailmap.data.OverpassClient
 import com.trailmap.data.Prefs
+import com.trailmap.data.Ride
+import com.trailmap.data.RideTrail
 import com.trailmap.data.SurfaceType
+import com.trailmap.data.ViewBounds
 import com.trailmap.data.Trail
 import com.trailmap.data.TrailSystem
 import com.trailmap.data.UseType
@@ -45,6 +48,10 @@ data class TrailsUiState(
     val focusTarget: GeoPoint? = null,
     /** The trail the user tapped on the map (peek card + highlight); null = nothing selected. */
     val selectedTrailId: String? = null,
+    /** User-built rides (named trail collections with summed length). */
+    val rides: List<Ride> = emptyList(),
+    /** Last map viewport, for "download the current view" offline. */
+    val viewBounds: ViewBounds? = null,
 ) {
     val radiusMiles: Double get() = radiusMeters / 1609.344
 
@@ -78,6 +85,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
             radiusMeters = 8000, // ALL mode default ~5 mi (wide enough to catch parkway/bike routes)
             savedIds = prefs.savedIds(),
             mapTheme = runCatching { MapTheme.valueOf(prefs.mapTheme()) }.getOrDefault(MapTheme.SYSTEM),
+            rides = prefs.rides(),
         ),
     )
     val state: StateFlow<TrailsUiState> = _state.asStateFlow()
@@ -135,6 +143,49 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     fun selectTrail(id: String) = _state.update { it.copy(selectedTrailId = id) }
 
     fun clearSelection() = _state.update { it.copy(selectedTrailId = null) }
+
+    // --- Rides (combine trails into a named ride with a total length) ---
+
+    fun rideById(id: String): Ride? = _state.value.rides.firstOrNull { it.id == id }
+
+    private fun persistRides(rides: List<Ride>) {
+        prefs.setRides(rides)
+        _state.update { it.copy(rides = rides) }
+    }
+
+    /** Create a ride (optionally seeded with one trail) and return its id. */
+    fun createRide(name: String, seed: Trail? = null): String {
+        val id = "ride_" + System.currentTimeMillis()
+        val ride = Ride(id, name.ifBlank { "Ride" }, seed?.let { listOf(it.toRideTrail()) } ?: emptyList())
+        persistRides(_state.value.rides + ride)
+        return id
+    }
+
+    /** Add a trail to a ride (no-op if already present). */
+    fun addTrailToRide(rideId: String, trail: Trail) = persistRides(
+        _state.value.rides.map { r ->
+            if (r.id != rideId || r.trails.any { it.id == trail.id }) r
+            else r.copy(trails = r.trails + trail.toRideTrail())
+        },
+    )
+
+    fun removeTrailFromRide(rideId: String, trailId: String) = persistRides(
+        _state.value.rides.map { r ->
+            if (r.id != rideId) r else r.copy(trails = r.trails.filterNot { it.id == trailId })
+        },
+    )
+
+    fun renameRide(rideId: String, name: String) = persistRides(
+        _state.value.rides.map { if (it.id == rideId) it.copy(name = name.ifBlank { it.name }) else it },
+    )
+
+    fun deleteRide(rideId: String) = persistRides(_state.value.rides.filterNot { it.id == rideId })
+
+    private fun Trail.toRideTrail() =
+        RideTrail(id = id, name = name, lengthMeters = lengthMeters, surface = surface.name, mtbScale = mtbScale)
+
+    /** Map viewport, captured on camera idle, for "download current view" offline. */
+    fun setViewBounds(bounds: ViewBounds) = _state.update { it.copy(viewBounds = bounds) }
 
     /** Minimum-length filter in miles (0 = any). */
     fun setMinLength(miles: Double) = _state.update { it.copy(minLengthMiles = miles) }

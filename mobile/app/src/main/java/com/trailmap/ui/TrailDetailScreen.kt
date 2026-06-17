@@ -17,10 +17,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -29,10 +31,18 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -51,6 +61,7 @@ fun TrailDetailScreen(vm: TrailsViewModel, id: String, onBack: () -> Unit) {
     val profiles by vm.profiles.collectAsStateWithLifecycle()
     val profile: ElevationProfile? = profiles[id]
     val context = LocalContext.current
+    var showAddToRide by remember { mutableStateOf(false) }
 
     LaunchedEffect(id) { vm.ensureProfile(id) }
 
@@ -65,6 +76,12 @@ fun TrailDetailScreen(vm: TrailsViewModel, id: String, onBack: () -> Unit) {
                 },
                 actions = {
                     if (trail != null) {
+                        IconButton(onClick = { showAddToRide = true }) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.PlaylistAdd,
+                                contentDescription = "Add to ride",
+                            )
+                        }
                         val saved = ui.isSaved(trail.id)
                         IconButton(onClick = { vm.toggleSaved(trail.id) }) {
                             Icon(
@@ -174,6 +191,88 @@ fun TrailDetailScreen(vm: TrailsViewModel, id: String, onBack: () -> Unit) {
                     else -> ElevationChart(profile, Modifier.padding(12.dp))
                 }
             }
+        }
+    }
+
+    if (showAddToRide && trail != null) {
+        var showNewRide by remember { mutableStateOf(false) }
+        if (showNewRide) {
+            NewRideDialog(
+                onDismiss = {
+                    showNewRide = false
+                    showAddToRide = false
+                },
+                onCreate = { name ->
+                    vm.createRide(name, seed = trail)
+                    showNewRide = false
+                    showAddToRide = false
+                    Toast.makeText(context, "Added to $name", Toast.LENGTH_SHORT).show()
+                },
+            )
+        } else {
+            AlertDialog(
+                onDismissRequest = { showAddToRide = false },
+                title = { Text("Add to ride") },
+                text = {
+                    LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                        item(key = "new") {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable { showNewRide = true }
+                                    .padding(vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.PlaylistAdd,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                                Spacer(Modifier.size(12.dp))
+                                Text(
+                                    "New ride…",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                        items(ui.rides, key = { it.id }) { ride ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        vm.addTrailToRide(ride.id, trail)
+                                        showAddToRide = false
+                                        Toast.makeText(
+                                            context,
+                                            "Added to ${ride.name}",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                    .padding(vertical = 14.dp),
+                            ) {
+                                Column {
+                                    Text(
+                                        ride.name,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    Text(
+                                        "${ride.trails.size} trails",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { showAddToRide = false }) { Text("Close") }
+                },
+            )
         }
     }
 }

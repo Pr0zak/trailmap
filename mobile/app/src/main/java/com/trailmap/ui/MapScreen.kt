@@ -2,7 +2,6 @@ package com.trailmap.ui
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -55,7 +54,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.trailmap.data.SurfaceType
 import com.trailmap.data.Trail
-import com.trailmap.offline.OfflinePacks
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
@@ -81,16 +79,10 @@ private const val LAYER_HIGHLIGHT = "trail-highlight-line"
 private const val EMPTY_FC = """{"type":"FeatureCollection","features":[]}"""
 private const val STYLE_LIGHT = "asset://osm_raster_style.json"
 private const val STYLE_DARK = "asset://carto_dark_style.json"
-// Live display uses the bundled asset styles above. MapLibre's OfflineManager can't read
-// asset://, so offline downloads point at the same style JSON hosted on the public repo.
-private const val STYLE_LIGHT_URL =
-    "https://raw.githubusercontent.com/Pr0zak/trailmap/main/mobile/app/src/main/assets/osm_raster_style.json"
-private const val STYLE_DARK_URL =
-    "https://raw.githubusercontent.com/Pr0zak/trailmap/main/mobile/app/src/main/assets/carto_dark_style.json"
 
 @SuppressLint("MissingPermission")
 @Composable
-fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit) {
+fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline: () -> Unit) {
     val ui by vm.state.collectAsStateWithLifecycle()
     val dark = when (ui.mapTheme) {
         MapTheme.SYSTEM -> isSystemInDarkTheme()
@@ -187,6 +179,17 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit) {
                     onCreate(null)
                     getMapAsync { map ->
                         mapRef.value = map
+                        // Capture the viewport on every camera idle → "download current view" offline.
+                        map.addOnCameraIdleListener {
+                            val b = map.projection.visibleRegion.latLngBounds
+                            vm.setViewBounds(
+                                com.trailmap.data.ViewBounds(
+                                    north = b.latitudeNorth, south = b.latitudeSouth,
+                                    east = b.longitudeEast, west = b.longitudeWest,
+                                    zoom = map.cameraPosition.zoom,
+                                ),
+                            )
+                        }
                         map.addOnMapClickListener { ll ->
                             // Query a padded box around the tap (not a single pixel) so tapping
                             // NEAR a thin trail line still selects it.
@@ -302,20 +305,10 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit) {
                 )
             }
             SmallFloatingActionButton(
-                onClick = {
-                    val map = mapRef.value
-                    if (map == null) {
-                        Toast.makeText(context, "Map not ready", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(context, "Downloading this area for offline…", Toast.LENGTH_SHORT).show()
-                        OfflinePacks.downloadVisible(
-                            context, map, if (dark) STYLE_DARK_URL else STYLE_LIGHT_URL,
-                        ) { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
-                    }
-                },
+                onClick = onOpenOffline,
                 containerColor = MaterialTheme.colorScheme.secondaryContainer,
             ) {
-                Icon(Icons.Filled.CloudDownload, contentDescription = "Download area for offline")
+                Icon(Icons.Filled.CloudDownload, contentDescription = "Offline areas")
             }
             FloatingActionButton(
                 onClick = { vm.locateAndLoad() },

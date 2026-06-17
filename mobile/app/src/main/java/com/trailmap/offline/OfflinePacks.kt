@@ -1,120 +1,198 @@
 package com.trailmap.offline
 
-import org.maplibre.android.maps.MapLibreMap
+import android.content.Context
+import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.offline.OfflineManager
 import org.maplibre.android.offline.OfflineRegion
 import org.maplibre.android.offline.OfflineRegionError
 import org.maplibre.android.offline.OfflineRegionStatus
 import org.maplibre.android.offline.OfflineTilePyramidRegionDefinition
-import java.io.File
 import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
- * Offline tile packs for trailmap. Wraps MapLibre's OfflineManager to download the map area
- * that's currently on screen for offline use.
+ * One downloaded (or downloading) offline tile region, surfaced to the UI.
  *
- * trailmap's basemap is a RASTER style loaded from an asset:// URI (e.g.
- * asset://osm_raster_style.json). OfflineTilePyramidRegionDefinition takes the style URI string,
- * so we pass `styleUri` straight through — the caller hands us the active asset style. The actual
- * map imagery comes from the remote raster tile servers referenced inside that style JSON, and
- * those remote tiles are what MapLibre fetches and caches into its offline store here.
+ * [name] is read from the region's metadata JSON ({"name":"…"}); the raw [region] handle is kept
+ * so the screen can delete it. [percent]/[complete] drive the progress UI.
+ */
+data class OfflineArea(
+    val name: String,
+    val percent: Int,
+    val complete: Boolean,
+    val completedTiles: Long,
+    val requiredTiles: Long,
+    val region: OfflineRegion,
+)
+
+/**
+ * Offline tile packs for trailmap. Wraps MapLibre's OfflineManager to download named map regions
+ * (the current view, or a preset metro/state bbox) for offline use, list them with live progress,
+ * and delete them.
+ *
+ * MapLibre's offline downloader fetches the style over the HTTP stack — it can't read asset:// —
+ * so [styleUrl] returns the hosted raster style JSON on the public repo's main branch. The remote
+ * raster tile URLs referenced inside that style are what MapLibre downloads + caches.
+ *
+ * All MapLibre offline callbacks fire on the main thread, so the lambdas here (which set Compose
+ * state) are safe to call directly from them.
  */
 object OfflinePacks {
+    private const val LIGHT_STYLE =
+        "https://raw.githubusercontent.com/Pr0zak/trailmap/main/mobile/app/src/main/assets/osm_raster_style.json"
+    private const val DARK_STYLE =
+        "https://raw.githubusercontent.com/Pr0zak/trailmap/main/mobile/app/src/main/assets/carto_dark_style.json"
+
+    /** Hosted raster style URL for the active theme (offline downloader needs http(s), not asset://). */
+    fun styleUrl(dark: Boolean): String = if (dark) DARK_STYLE else LIGHT_STYLE
+
+    /** Raise the per-region tile cap before any download (default is 6000, too small for state-wide). */
+    fun ensureLimit(context: Context) {
+        OfflineManager.getInstance(context).setOfflineMapboxTileCountLimit(50_000L)
+    }
+
+    /** Decode the region name from its {"name":"…"} metadata, or a fallback if unparseable. */
+    private fun nameOf(region: OfflineRegion): String =
+        runCatching {
+            val json = String(region.metadata, Charsets.UTF_8)
+            // Minimal extraction — metadata is always our own {"name":"…"} blob.
+            Regex("\"name\"\\s*:\\s*\"(.*?)\"").find(json)?.groupValues?.get(1)
+        }.getOrNull()?.takeIf { it.isNotBlank() } ?: "Offline area"
+
+    private fun percentOf(status: OfflineRegionStatus): Int {
+        if (status.isComplete) return 100
+        val required = max(1L, status.requiredResourceCount)
+        return (100.0 * status.completedResourceCount / required).roundToInt().coerceIn(0, 100)
+    }
+
     /**
-     * Download the currently-visible map area for offline use.
-     *
-     * All MapLibre offline callbacks fire on the main thread, so [onStatus] (which shows a Toast
-     * in MapScreen) is safe to call directly from them.
+     * List every offline region with its current status, built into [OfflineArea]s. Because each
+     * region's status is itself an async callback, we fan out and call [onResult] once all statuses
+     * have come back. [onResult] is invoked on the main thread.
      */
-    fun downloadVisible(
-        context: android.content.Context,
-        map: MapLibreMap,
-        styleUri: String,
-        onStatus: (String) -> Unit,
+    fun list(context: Context, onResult: (List<OfflineArea>) -> Unit) {
+        OfflineManager.getInstance(context).listOfflineRegions(
+            object : OfflineManager.ListOfflineRegionsCallback {
+                override fun onList(offlineRegions: Array<OfflineRegion>?) {
+                    val regions = offlineRegions?.toList().orEmpty()
+                    if (regions.isEmpty()) {
+                        onResult(emptyList())
+                        return
+                    }
+                    val results = arrayOfNulls<OfflineArea>(regions.size)
+                    var remaining = regions.size
+                    regions.forEachIndexed { idx, region ->
+                        region.getStatus(object : OfflineRegion.OfflineRegionStatusCallback {
+                            override fun onStatus(status: OfflineRegionStatus?) {
+                                results[idx] = if (status != null) {
+                                    OfflineArea(
+                                        name = nameOf(region),
+                                        percent = percentOf(status),
+                                        complete = status.isComplete,
+                                        completedTiles = status.completedTileCount,
+                                        requiredTiles = status.requiredResourceCount,
+                                        region = region,
+                                    )
+                                } else {
+                                    OfflineArea(nameOf(region), 0, false, 0L, 0L, region)
+                                }
+                                if (--remaining == 0) onResult(results.filterNotNull())
+                            }
+
+                            override fun onError(error: String?) {
+                                // Still surface the region so the user can delete it.
+                                results[idx] = OfflineArea(nameOf(region), 0, false, 0L, 0L, region)
+                                if (--remaining == 0) onResult(results.filterNotNull())
+                            }
+                        })
+                    }
+                }
+
+                override fun onError(error: String) {
+                    onResult(emptyList())
+                }
+            },
+        )
+    }
+
+    /**
+     * Download a named region over an explicit bbox at the given zoom range. [onUpdate] receives
+     * human-readable status strings ("Downloading… 42%", "Ready (N tiles)", error text) on the
+     * main thread.
+     */
+    fun downloadBounds(
+        context: Context,
+        name: String,
+        styleUrl: String,
+        north: Double,
+        south: Double,
+        east: Double,
+        west: Double,
+        minZoom: Double,
+        maxZoom: Double,
+        onUpdate: (String) -> Unit,
     ) {
         try {
-            // The area on screen right now.
-            val bounds = map.projection.visibleRegion.latLngBounds
-
-            // Don't download the whole world: start one zoom below the current camera (floored at
-            // z10), and go down to z15 for usable trail detail.
-            val minZoom = max(10.0, map.cameraPosition.zoom - 1.0)
-            val maxZoom = 15.0
+            ensureLimit(context)
+            val bounds = LatLngBounds.from(north, east, south, west)
             val pixelRatio = context.resources.displayMetrics.density
-
-            // The offline downloader can't fetch an asset:// style (it routes style fetches through
-            // the HTTP stack). Copy the bundled asset style to a real file and hand it a file:// URI;
-            // the remote tile URLs referenced inside the style are then downloaded + cached.
             val definition = OfflineTilePyramidRegionDefinition(
-                resolveStyleUri(context, styleUri),
+                styleUrl,
                 bounds,
                 minZoom,
                 maxZoom,
                 pixelRatio,
             )
-
-            // Name the pack by its center + a rough timestamp so packs are distinguishable.
-            val center = bounds.center
-            val name = "trailmap-${"%.4f".format(center.latitude)},${"%.4f".format(center.longitude)}" +
-                "-${System.currentTimeMillis()}"
             val metadata = """{"name":"$name"}""".toByteArray(Charsets.UTF_8)
 
-            onStatus("Starting offline download…")
+            onUpdate("Starting download…")
 
             OfflineManager.getInstance(context).createOfflineRegion(
                 definition,
                 metadata,
                 object : OfflineManager.CreateOfflineRegionCallback {
                     override fun onError(error: String) {
-                        onStatus("Offline download failed: $error")
+                        onUpdate("Download failed: $error")
                     }
 
                     override fun onCreate(region: OfflineRegion) {
-                        // Track the last reported percent so we only surface occasional updates
-                        // (a Toast per status change would spam the UI).
                         var lastPercent = -1
-
                         region.setObserver(object : OfflineRegion.OfflineRegionObserver {
                             override fun onStatusChanged(status: OfflineRegionStatus) {
                                 if (status.isComplete) {
-                                    onStatus("Offline area ready (${status.completedResourceCount} tiles)")
+                                    onUpdate("Ready (${status.completedTileCount} tiles)")
                                     region.setDownloadState(OfflineRegion.STATE_INACTIVE)
                                     return
                                 }
-                                val required = max(1L, status.requiredResourceCount)
-                                val percent =
-                                    (100.0 * status.completedResourceCount / required).roundToInt()
+                                val percent = percentOf(status)
                                 if (percent != lastPercent) {
                                     lastPercent = percent
-                                    onStatus("Downloading offline area… $percent%")
+                                    onUpdate("Downloading… $percent%")
                                 }
                             }
 
                             override fun onError(error: OfflineRegionError) {
-                                onStatus("Offline download error: ${error.reason}")
+                                onUpdate("Download error: ${error.reason}")
                             }
 
                             override fun mapboxTileCountLimitExceeded(limit: Long) {
-                                onStatus("Area too large for offline ($limit-tile limit) — zoom in")
+                                onUpdate("Area too large (over $limit-tile limit) — pick a smaller area")
                             }
                         })
-
                         region.setDownloadState(OfflineRegion.STATE_ACTIVE)
                     }
                 },
             )
         } catch (e: Exception) {
-            onStatus("Offline download error: ${e.message}")
+            onUpdate("Download error: ${e.message}")
         }
     }
 
-    /** asset://name → copy to filesDir and return a file:// URI the offline downloader can read. */
-    private fun resolveStyleUri(context: android.content.Context, styleUri: String): String {
-        if (!styleUri.startsWith("asset://")) return styleUri
-        val name = styleUri.removePrefix("asset://")
-        val out = File(context.filesDir, name)
-        context.assets.open(name).use { input -> out.outputStream().use { input.copyTo(it) } }
-        return "file://${out.absolutePath}"
+    /** Delete one region (and its cached tiles). [onDone] fires on the main thread when finished. */
+    fun delete(area: OfflineArea, onDone: () -> Unit) {
+        area.region.delete(object : OfflineRegion.OfflineRegionDeleteCallback {
+            override fun onDelete() = onDone()
+            override fun onError(error: String) = onDone()
+        })
     }
 }

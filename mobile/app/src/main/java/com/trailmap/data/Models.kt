@@ -1,6 +1,40 @@
 package com.trailmap.data
 
 import androidx.compose.ui.graphics.Color
+import kotlinx.serialization.Serializable
+
+/** A lat/lon viewport (for "download the current map view" offline). */
+data class ViewBounds(
+    val north: Double,
+    val south: Double,
+    val east: Double,
+    val west: Double,
+    val zoom: Double,
+)
+
+/** One trail in a [Ride] — a serializable snapshot so totals work offline / across areas. */
+@Serializable
+data class RideTrail(
+    val id: String,
+    val name: String,
+    val lengthMeters: Double,
+    val surface: String,        // SurfaceType.name
+    val mtbScale: Int? = null,
+)
+
+/** A user-built ride: a named set of trails whose lengths sum into a total. */
+@Serializable
+data class Ride(
+    val id: String,
+    val name: String,
+    val trails: List<RideTrail> = emptyList(),
+) {
+    val totalMeters: Double get() = trails.sumOf { it.lengthMeters }
+    val totalMiles: Double get() = totalMeters / 1609.344
+    /** Length share per surface bucket name, for a simple breakdown. */
+    val surfaceMix: Map<String, Double>
+        get() = trails.groupBy { it.surface }.mapValues { (_, ts) -> ts.sumOf { it.lengthMeters } }
+}
 
 /** A single lat/lon vertex. Domain type kept independent of MapLibre's LatLng. */
 data class GeoPoint(val lat: Double, val lon: Double)

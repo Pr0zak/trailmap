@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.Route
 import android.widget.Toast
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -35,6 +36,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.trailmap.ui.MapScreen
+import com.trailmap.ui.OfflineScreen
+import com.trailmap.ui.RideDetailScreen
+import com.trailmap.ui.RidesScreen
 import com.trailmap.ui.TrailDetailScreen
 import com.trailmap.ui.TrailListScreen
 import com.trailmap.ui.TrailsViewModel
@@ -50,20 +54,21 @@ class MainActivity : ComponentActivity() {
 private sealed class Tab(val route: String, val label: String) {
     data object Map : Tab("map", "Map")
     data object List : Tab("list", "Trails")
+    data object Rides : Tab("rides", "Rides")
 }
 
 @Composable
 private fun TrailmapRoot() {
     val nav = rememberNavController()
     val vm: TrailsViewModel = viewModel()
-    val tabs = listOf(Tab.Map, Tab.List)
+    val tabs = listOf(Tab.Map, Tab.List, Tab.Rides)
     val backStack by nav.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route
 
     Scaffold(
         bottomBar = {
-            // Hide the bar on the detail screen for an immersive read.
-            if (currentRoute == Tab.Map.route || currentRoute == Tab.List.route) {
+            // Bar shows on top-level tabs; hidden on detail/ride/offline for an immersive read.
+            if (currentRoute in tabs.map { it.route }) {
                 NavigationBar {
                     tabs.forEach { tab ->
                         val selected = backStack?.destination?.hierarchy?.any { it.route == tab.route } == true
@@ -78,7 +83,11 @@ private fun TrailmapRoot() {
                             },
                             icon = {
                                 Icon(
-                                    if (tab is Tab.Map) Icons.Filled.Map else Icons.AutoMirrored.Filled.List,
+                                    when (tab) {
+                                        Tab.Map -> Icons.Filled.Map
+                                        Tab.List -> Icons.AutoMirrored.Filled.List
+                                        Tab.Rides -> Icons.Filled.Route
+                                    },
                                     contentDescription = tab.label,
                                 )
                             },
@@ -91,7 +100,11 @@ private fun TrailmapRoot() {
     ) { padding ->
         NavHost(nav, startDestination = Tab.Map.route, modifier = Modifier.padding(padding)) {
             composable(Tab.Map.route) {
-                MapScreen(vm) { id -> nav.navigate("detail/$id") }
+                MapScreen(
+                    vm,
+                    onOpenTrail = { id -> nav.navigate("detail/$id") },
+                    onOpenOffline = { nav.navigate("offline") },
+                )
             }
             composable(Tab.List.route) {
                 TrailListScreen(
@@ -105,6 +118,16 @@ private fun TrailmapRoot() {
                         }
                     },
                 )
+            }
+            composable(Tab.Rides.route) {
+                RidesScreen(vm, onOpenRide = { id -> nav.navigate("ride/$id") })
+            }
+            composable("ride/{id}") { entry ->
+                val id = entry.arguments?.getString("id").orEmpty()
+                RideDetailScreen(vm, id, onBack = { nav.popBackStack() }, onOpenTrail = { tid -> nav.navigate("detail/$tid") })
+            }
+            composable("offline") {
+                OfflineScreen(vm, onBack = { nav.popBackStack() })
             }
             composable("detail/{id}") { entry ->
                 val id = entry.arguments?.getString("id").orEmpty()
