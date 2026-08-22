@@ -22,8 +22,10 @@ import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ElevatedButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -54,12 +56,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.trailmap.data.SurfaceType
 import com.trailmap.data.Trail
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.add
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.MapLibreMap
@@ -114,17 +112,13 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
     // First-launch: request location, then locateAndLoad either way (KC fallback inside).
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { vm.locateAndLoad() }
-    var requested by remember { mutableStateOf(false) }
+    ) { vm.bootstrap() }
     LaunchedEffect(Unit) {
-        if (!requested) {
-            requested = true
-            launcher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
-    }
-    // Belt-and-suspenders: if nothing loaded (permission flow short-circuited), kick a load.
-    LaunchedEffect(Unit) {
-        if (ui.trails.isEmpty() && !ui.loading) vm.load()
+        // Only ask when the permission is actually missing. Re-launching the contract on an
+        // already-granted permission fires the callback immediately, which used to mean a
+        // full network refetch on every Map→Trails→Map bounce.
+        if (vm.hasLocationPermission()) vm.bootstrap()
+        else launcher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
     }
 
     // (Re)load the basemap style when the map is ready or the theme flips, then re-add
@@ -138,34 +132,52 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
         }
     }
 
-    // Center the camera on ui.center whenever it changes and the style is ready.
-    LaunchedEffect(ui.center, styleRef.value) {
-        if (styleRef.value != null) {
-            mapRef.value?.cameraPosition = CameraPosition.Builder()
-                .target(LatLng(ui.center.lat, ui.center.lon))
-                .zoom(12.5)
-                .build()
-        }
+    // Place the camera once, when the style first loads. After that the camera belongs to
+    // the user: panning drives which trails are fetched, so following ui.center here would
+    // yank the map back (and re-trigger the fetch it just answered). Explicit recenters go
+    // through ui.focusTarget instead.
+    var cameraPlaced by remember { mutableStateOf(false) }
+    LaunchedEffect(styleRef.value, ui.center) {
+        if (cameraPlaced || styleRef.value == null) return@LaunchedEffect
+        // Switching tabs disposes this composition, so start from where the camera last
+        // settled rather than teleporting back to the device location at the default zoom.
+        val start = vm.lastCamera ?: CameraTarget(ui.center, TrailsViewModel.DEFAULT_ZOOM)
+        mapRef.value?.cameraPosition = CameraPosition.Builder()
+            .target(LatLng(start.point.lat, start.point.lon))
+            .zoom(start.zoom ?: TrailsViewModel.DEFAULT_ZOOM)
+            .build()
+        cameraPlaced = true
     }
 
-    // Redraw the trail lines whenever the filtered set changes (and the source exists).
-    LaunchedEffect(ui.filtered, styleRef.value) {
-        styleRef.value?.getSourceAs<GeoJsonSource>(SRC_TRAILS)?.setGeoJson(trailsFc(ui.filtered))
+    // Redraw the trail lines when the data or the filters change. Keyed on ui.filterKey (a
+    // short String) rather than ui.filtered, so a camera idle doesn't drag Compose through a
+    // structural comparison of every trail's geometry. The GeoJSON is built on a background
+    // dispatcher — a Kansas City pull is ~30k coordinates and would jank the frame here.
+    LaunchedEffect(ui.filterKey, styleRef.value) {
+        val style = styleRef.value ?: return@LaunchedEffect
+        val fc = withContext(Dispatchers.Default) { trailsFc(ui.filtered) }
+        if (styleRef.value !== style) return@LaunchedEffect // theme flipped mid-build
+        style.getSourceAs<GeoJsonSource>(SRC_TRAILS)?.setGeoJson(fc)
     }
 
     // Highlight the selected trail (or clear the highlight when nothing is selected).
-    LaunchedEffect(ui.selectedTrailId, styleRef.value) {
+    LaunchedEffect(ui.selectedTrailId, ui.trailsVersion, styleRef.value) {
+        val style = styleRef.value ?: return@LaunchedEffect
         val selected = ui.selectedTrailId?.let { vm.trailById(it) }
         val fc = if (selected != null) trailsFc(listOf(selected)) else EMPTY_FC
-        styleRef.value?.getSourceAs<GeoJsonSource>(SRC_HIGHLIGHT)?.setGeoJson(fc)
+        style.getSourceAs<GeoJsonSource>(SRC_HIGHLIGHT)?.setGeoJson(fc)
     }
 
-    // One-shot: tapping a trail-system header focuses the map on that park, then clears it.
-    LaunchedEffect(ui.focusTarget) {
+    // One-shot: an explicit recenter (my-location, or a tapped trail-system header).
+    LaunchedEffect(ui.focusTarget, styleRef.value) {
         val target = ui.focusTarget ?: return@LaunchedEffect
-        mapRef.value?.animateCamera(
+        val map = mapRef.value ?: return@LaunchedEffect
+        if (styleRef.value == null) return@LaunchedEffect // wait for the style, don't drop the move
+        cameraPlaced = true
+        map.animateCamera(
             org.maplibre.android.camera.CameraUpdateFactory.newLatLngZoom(
-                LatLng(target.lat, target.lon), 14.0,
+                LatLng(target.point.lat, target.point.lon),
+                target.zoom ?: map.cameraPosition.zoom,
             ),
         )
         vm.consumeFocus()
@@ -179,15 +191,22 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
                     onCreate(null)
                     getMapAsync { map ->
                         mapRef.value = map
-                        // Capture the viewport on every camera idle → "download current view" offline.
+                        // Every time the camera settles: record the viewport (for "download
+                        // current view" offline) and let the ViewModel decide whether the pan
+                        // moved far enough off the loaded area to warrant fetching new trails.
                         map.addOnCameraIdleListener {
                             val b = map.projection.visibleRegion.latLngBounds
-                            vm.setViewBounds(
+                            val cam = map.cameraPosition
+                            // CameraPosition.target is @Nullable; fall back to the bbox midpoint.
+                            val lat = cam.target?.latitude ?: ((b.latitudeNorth + b.latitudeSouth) / 2.0)
+                            val lon = cam.target?.longitude ?: ((b.longitudeEast + b.longitudeWest) / 2.0)
+                            vm.onCameraIdle(
                                 com.trailmap.data.ViewBounds(
                                     north = b.latitudeNorth, south = b.latitudeSouth,
                                     east = b.longitudeEast, west = b.longitudeWest,
-                                    zoom = map.cameraPosition.zoom,
+                                    zoom = cam.zoom,
                                 ),
+                                com.trailmap.data.GeoPoint(lat, lon),
                             )
                         }
                         map.addOnMapClickListener { ll ->
@@ -233,28 +252,72 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
                 onSetMode = vm::setMode,
                 onSetRadiusMiles = vm::setRadiusMiles,
                 onSetMinLength = vm::setMinLength,
+                onSetAutoLoad = vm::setAutoLoadOnPan,
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
             )
         }
 
-        if (ui.loading) {
-            CircularProgressIndicator(
-                Modifier.align(Alignment.TopCenter).padding(top = 64.dp),
-            )
-        }
+        // Status strip, tucked under the two chip rows: a loading pill while a fetch is in
+        // flight, otherwise a "Search this area" button when the view has drifted off the
+        // loaded trails and auto-load won't cover it (turned off, or zoomed too far out).
+        val offerManualSearch = ui.viewportStale && !ui.loading &&
+            (!ui.autoLoadOnPan || !ui.canAutoCover)
+        Column(
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 108.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (ui.loading) {
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                    shadowElevation = 4.dp,
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.size(8.dp))
+                        Text("Loading trails…", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            } else if (offerManualSearch) {
+                ElevatedButton(onClick = { vm.searchThisArea() }) {
+                    Icon(Icons.Filled.Search, contentDescription = null, Modifier.size(16.dp))
+                    Spacer(Modifier.size(6.dp))
+                    Text("Search this area")
+                }
+                if (!ui.canAutoCover) {
+                    // Say why nothing loaded on its own, rather than leaving it a silent no-op.
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+                    ) {
+                        Text(
+                            "Zoom in for automatic loading",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        )
+                    }
+                }
+            }
 
-        ui.error?.let { msg ->
-            Surface(
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 64.dp),
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.errorContainer,
-            ) {
-                Text(
-                    msg,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                )
+            val notice = ui.error
+                ?: "Offline — showing saved trails".takeIf { ui.servingStale && !ui.loading }
+            notice?.let { msg ->
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                ) {
+                    Text(
+                        msg,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    )
+                }
             }
         }
 
@@ -311,7 +374,7 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
                 Icon(Icons.Filled.CloudDownload, contentDescription = "Offline areas")
             }
             FloatingActionButton(
-                onClick = { vm.locateAndLoad() },
+                onClick = { vm.recenterOnMe() },
                 containerColor = MaterialTheme.colorScheme.primary,
             ) {
                 Icon(Icons.Filled.MyLocation, contentDescription = "My location")
@@ -504,30 +567,56 @@ private fun surfaceColorExpr(dark: Boolean): Expression {
     )
 }
 
-/** Build a FeatureCollection: one LineString feature per Trail.path, tagged surface + id. */
+/**
+ * Build a FeatureCollection — one LineString feature per [Trail.paths] entry, tagged with the
+ * trail id, surface bucket and mtb:scale — as raw JSON.
+ *
+ * Hand-rolled with a StringBuilder rather than kotlinx's buildJsonObject: a Kansas City pull
+ * is on the order of 30,000 coordinates, and the builder path allocates a JsonArray plus two
+ * JsonPrimitives for every single vertex before serializing the tree. Coordinates are emitted
+ * at five decimal places (~1 m), which is finer than any of this data is surveyed and roughly
+ * a third shorter than full Double precision.
+ *
+ * Call this off the main thread.
+ */
 private fun trailsFc(trails: List<Trail>): String {
-    val features = mutableListOf<JsonObject>()
+    val sb = StringBuilder(1 shl 16)
+    sb.append("{\"type\":\"FeatureCollection\",\"features\":[")
+    var first = true
     for (trail in trails) {
+        val mtb = trail.mtbScale?.toString() ?: "none"
         for (path in trail.paths) {
             if (path.size < 2) continue
-            features += buildJsonObject {
-                put("type", "Feature")
-                put("properties", buildJsonObject {
-                    put("id", trail.id)
-                    put("surface", trail.surface.name)
-                    put("mtb", trail.mtbScale?.toString() ?: "none")
-                })
-                put("geometry", buildJsonObject {
-                    put("type", "LineString")
-                    put("coordinates", buildJsonArray {
-                        path.forEach { gp -> add(buildJsonArray { add(gp.lon); add(gp.lat) }) }
-                    })
-                })
+            if (!first) sb.append(',')
+            first = false
+            sb.append("{\"type\":\"Feature\",\"properties\":{\"id\":")
+            appendJsonString(sb, trail.id)
+            sb.append(",\"surface\":\"").append(trail.surface.name)
+            sb.append("\",\"mtb\":\"").append(mtb)
+            sb.append("\"},\"geometry\":{\"type\":\"LineString\",\"coordinates\":[")
+            for (i in path.indices) {
+                if (i > 0) sb.append(',')
+                val p = path[i]
+                sb.append('[').append(round5(p.lon)).append(',').append(round5(p.lat)).append(']')
             }
+            sb.append("]}}")
         }
     }
-    return buildJsonObject {
-        put("type", "FeatureCollection")
-        put("features", JsonArray(features))
-    }.toString()
+    sb.append("]}")
+    return sb.toString()
+}
+
+/** Round to 5 decimals and render locale-independently (Double.toString never localizes). */
+private fun round5(v: Double): String = (Math.round(v * 100000.0) / 100000.0).toString()
+
+/** Append [raw] as a quoted JSON string, escaping the two characters that can break out. */
+private fun appendJsonString(sb: StringBuilder, raw: String) {
+    sb.append('"')
+    for (c in raw) when {
+        c == '"' -> sb.append("\\\"")
+        c == '\\' -> sb.append("\\\\")
+        c.code < 0x20 -> sb.append(' ')
+        else -> sb.append(c)
+    }
+    sb.append('"')
 }

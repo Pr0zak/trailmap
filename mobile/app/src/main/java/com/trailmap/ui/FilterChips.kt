@@ -12,6 +12,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DirectionsBike
 import androidx.compose.material.icons.filled.DirectionsWalk
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -28,7 +29,7 @@ import kotlin.math.roundToInt
  * Filter controls reused on the Map overlay and the Trail list.
  *
  * Two short horizontally-scrollable rows stacked in a Column:
- *  - Row 1: mode toggle (All / MTB), radius selector (MTB only), min-length filter.
+ *  - Row 1: auto-load toggle, mode toggle (All / MTB), radius selector, min-length filter.
  *  - Row 2: surface chips (colored dot per [SurfaceType.color]) + use chips (walk/bike icon).
  *
  * UNKNOWN is intentionally not surfaced as a chip (it stays in the filter set by default).
@@ -41,6 +42,7 @@ fun FilterChips(
     onSetMode: (MapMode) -> Unit,
     onSetRadiusMiles: (Int) -> Unit,
     onSetMinLength: (Double) -> Unit,
+    onSetAutoLoad: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -52,6 +54,24 @@ fun FilterChips(
             modifier = Modifier.horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            // Auto-load refetches trails as you pan. It's on by default; the chip is here so
+            // heavy map-browsing can be kept off the public Overpass API when you don't want it.
+            FilterChip(
+                selected = ui.autoLoadOnPan,
+                onClick = { onSetAutoLoad(!ui.autoLoadOnPan) },
+                label = { Text("Auto") },
+                leadingIcon = {
+                    Icon(
+                        Icons.Filled.Sync,
+                        contentDescription = if (ui.autoLoadOnPan) {
+                            "Auto-load trails while panning: on"
+                        } else {
+                            "Auto-load trails while panning: off"
+                        },
+                        modifier = Modifier.size(FilterChipDefaults.IconSize),
+                    )
+                },
+            )
             FilterChip(
                 selected = ui.mode == MapMode.ALL,
                 onClick = { onSetMode(MapMode.ALL) },

@@ -120,6 +120,7 @@ fun TrailListScreen(
                 onSetMode = vm::setMode,
                 onSetRadiusMiles = vm::setRadiusMiles,
                 onSetMinLength = vm::setMinLength,
+                onSetAutoLoad = vm::setAutoLoadOnPan,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 8.dp),

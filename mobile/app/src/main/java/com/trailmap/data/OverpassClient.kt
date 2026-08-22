@@ -1,15 +1,26 @@
 package com.trailmap.data
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.coroutineContext
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlin.math.cos
 
 /**
  * Fetches OSM trail ways from the public Overpass API and groups them into
@@ -27,9 +38,43 @@ class OverpassClient(private val cacheDir: File? = null) {
         // Overpass queries declare [timeout:120]; allow the read to match (the MTB park
         // query returns ~3 MB and can take >60 s under public-server load).
         .readTimeout(130, TimeUnit.SECONDS)
+        // Bound the whole call too, so a body that trickles forever can't hold a mirror slot
+        // past the point where the user has certainly moved on.
+        .callTimeout(150, TimeUnit.SECONDS)
         .build()
 
     private val json = Json { ignoreUnknownKeys = true }
+
+    /**
+     * True when the last response handed back was a stale cache fallback rather than a fresh
+     * fetch. Read straight after [fetchTrails] so the UI can say so instead of presenting
+     * week-old trails as current.
+     */
+    @Volatile
+    var lastServedStale: Boolean = false
+        private set
+
+    /** Wall-clock of the last request actually put on the wire, for the minimum-gap throttle. */
+    @Volatile
+    private var lastNetworkAt = 0L
+
+    /** After a 429, don't ask again until this time. */
+    @Volatile
+    private var rateLimitedUntil = 0L
+
+    /** One-time prune of expired disk-cache entries; nothing else deletes from that dir. */
+    @Volatile
+    private var pruned = false
+
+    /**
+     * True when this (center, radius) can be served without touching the network — the caller
+     * uses it to skip the ride-out-the-flick debounce for an area that will come back instantly.
+     */
+    fun isWarm(center: GeoPoint, radiusMeters: Int, mtb: Boolean): Boolean {
+        val file = cacheFile(if (mtb) "mtb" else "all", center, radiusMeters) ?: return false
+        synchronized(memo) { if (memo.containsKey(file.name)) return true }
+        return file.exists() && System.currentTimeMillis() - file.lastModified() < CACHE_TTL_MS
+    }
 
     suspend fun fetchTrails(
         center: GeoPoint,
@@ -38,25 +83,25 @@ class OverpassClient(private val cacheDir: File? = null) {
         forceRefresh: Boolean = false,
     ): List<Trail> =
         withContext(Dispatchers.IO) {
+            lastServedStale = false
+            pruneCacheOnce()
             if (mtb) {
                 // Sequential (one Overpass request at a time) — firing both at once trips the
                 // public server's per-IP rate limit (429). Parks are best-effort.
-                val trailsRaw = cachedRaw("mtb", center, radiusMeters, forceRefresh) {
-                    post(buildMtbQuery(center, radiusMeters))
-                }
-                val response = parseResponse(trailsRaw)
-                val parks = runCatching {
-                    val parksRaw = cachedRaw("parks", center, radiusMeters, forceRefresh) {
-                        post(buildParkQuery(center, radiusMeters))
-                    }
-                    parseParks(parksRaw)
-                }.getOrElse { emptyList() }
-                buildMtbTrails(response.elements, center, parks)
+                val elements = elementsFor(
+                    "mtb", center, radiusMeters, forceRefresh, buildMtbQuery(center, radiusMeters),
+                )
+                coroutineContext.ensureActive()
+                val parks = runCatching { parksFor(center, radiusMeters, forceRefresh) }
+                    .getOrElse { if (it is CancellationException) throw it else emptyList() }
+                coroutineContext.ensureActive()
+                buildMtbTrails(elements, center, parks)
             } else {
-                val raw = cachedRaw("all", center, radiusMeters, forceRefresh) {
-                    post(buildQuery(center, radiusMeters))
-                }
-                buildTrails(parseResponse(raw).elements, center)
+                val elements = elementsFor(
+                    "all", center, radiusMeters, forceRefresh, buildQuery(center, radiusMeters),
+                )
+                coroutineContext.ensureActive()
+                buildTrails(elements, center)
             }
         }
 
@@ -64,17 +109,115 @@ class OverpassClient(private val cacheDir: File? = null) {
         runCatching { json.decodeFromString<OverpassResponse>(raw) }
             .getOrElse { throw Exception("Overpass parse failed: ${it.message}", it) }
 
+    // --- In-memory parse cache ----------------------------------------------
+
+    /** A parsed response plus the size of the JSON it came from, which the budget is charged in. */
+    private class Memoized(val elements: List<OverpassElement>, val rawBytes: Int)
+
+    /**
+     * Recently parsed responses, keyed the same way as the disk cache. Deserializing a Kansas
+     * City response is ~3 MB of JSON and dominates a disk-cache hit, so panning back to an
+     * area you just left would otherwise re-pay it every time. Only the parsed elements are
+     * kept, not the finished [Trail]s: [buildTrails] is cheap by comparison and has to re-run
+     * anyway so that each trail's distance is measured from the *current* center.
+     *
+     * Access-ordered, and bounded by total response size rather than entry count — a 40-mile
+     * MTB response is twenty times the size of a zoomed-in one, so counting entries would
+     * either starve close-in panning or retain far too much.
+     */
+    private val memo = LinkedHashMap<String, Memoized>(8, 0.75f, true)
+    private var memoBytes = 0L
+
+    /** Insert under the byte budget, evicting least-recently-used entries to make room. */
+    private fun memoPut(key: String, value: Memoized) = synchronized(memo) {
+        memo.remove(key)?.let { memoBytes -= it.rawBytes }
+        memo[key] = value
+        memoBytes += value.rawBytes
+        val it = memo.entries.iterator()
+        while (it.hasNext() && (memoBytes > MEMO_BUDGET_BYTES || memo.size > MEMO_MAX_ENTRIES)) {
+            val eldest = it.next()
+            if (eldest.key == key) continue // never evict what we just inserted
+            memoBytes -= eldest.value.rawBytes
+            it.remove()
+        }
+    }
+
+    /**
+     * Parsed elements for one (kind, area), memo → disk → network in that order. A memo hit
+     * skips the multi-megabyte file read as well as the parse.
+     */
+    private suspend fun elementsFor(
+        kind: String,
+        center: GeoPoint,
+        radiusMeters: Int,
+        forceRefresh: Boolean,
+        query: String,
+    ): List<OverpassElement> {
+        val key = cacheFile(kind, center, radiusMeters)?.name
+        if (!forceRefresh && key != null) {
+            synchronized(memo) { memo[key] }?.let { return it.elements }
+        }
+        val raw = cachedRaw(kind, center, radiusMeters, forceRefresh) { post(query) }
+        coroutineContext.ensureActive()
+        val parsed = parseResponse(raw).elements
+        if (key != null) memoPut(key, Memoized(parsed, raw.length))
+        return parsed
+    }
+
+    /**
+     * Named parks for the naming pass in MTB mode. Panning inside one metro re-uses the last
+     * park set rather than pulling another multi-megabyte polygon response: park boundaries
+     * don't change between two adjacent screens, and this halves MTB's per-pan cost.
+     */
+    private suspend fun parksFor(center: GeoPoint, radiusMeters: Int, forceRefresh: Boolean): List<Park> {
+        val reusable = !forceRefresh && lastParksCenter != null &&
+            lastParksRadius >= radiusMeters &&
+            Geo.haversineMeters(lastParksCenter!!, center) < lastParksRadius * PARK_REUSE_FRACTION
+        if (reusable) return lastParks
+
+        val parks = parseParks(
+            elementsFor("parks", center, radiusMeters, forceRefresh, buildParkQuery(center, radiusMeters)),
+        )
+        lastParks = parks
+        lastParksCenter = center
+        lastParksRadius = radiusMeters
+        return parks
+    }
+
+    private var lastParks: List<Park> = emptyList()
+    private var lastParksCenter: GeoPoint? = null
+    private var lastParksRadius = 0
+
+    /** Delete expired cache files once per process. Pan-loading writes far more of them. */
+    private fun pruneCacheOnce() {
+        if (pruned) return
+        pruned = true
+        val dir = cacheDir?.let { File(it, "overpass") } ?: return
+        val cutoff = System.currentTimeMillis() - CACHE_TTL_MS
+        runCatching { dir.listFiles()?.forEach { f -> if (f.lastModified() < cutoff) f.delete() } }
+    }
+
     // --- Disk cache ---------------------------------------------------------
 
     /**
      * Resolve the cache file for a given (kind, center, radius). Returns null when no
-     * [cacheDir] is configured. Center is rounded to 3 decimals (~100 m) so small GPS
-     * jitter reuses the same cache entry — fine for area-level trail discovery.
+     * [cacheDir] is configured.
      */
     private fun cacheFile(kind: String, center: GeoPoint, radiusMeters: Int): File? {
         val dir = cacheDir ?: return null
-        // CACHE_SCHEMA bumps whenever the queries change, invalidating stale cached responses.
-        val key = "%s_%s_%.3f_%.3f_%d".format(CACHE_SCHEMA, kind, center.lat, center.lon, radiusMeters)
+        // Snap the center onto a grid sized at ~1/6 of the query radius. Panning the map
+        // refetches around a new center every time, and a 100 m-precision key would mint a
+        // fresh cache entry for each of those; a radius-relative grid means revisiting an
+        // area you already pulled is a disk hit instead of a 3 MB download. Two centers that
+        // share a cell differ by at most ~radius/4, well inside what the query covers.
+        val stepMeters = (radiusMeters / 6.0).coerceAtLeast(250.0)
+        val latStep = stepMeters / 111_320.0
+        val lonStep = latStep / cos(Math.toRadians(center.lat)).coerceAtLeast(0.1)
+        val qLat = Math.round(center.lat / latStep) * latStep
+        val qLon = Math.round(center.lon / lonStep) * lonStep
+        // CACHE_SCHEMA bumps whenever the queries (or this key format) change, invalidating
+        // stale cached responses.
+        val key = "%s_%s_%.5f_%.5f_%d".format(CACHE_SCHEMA, kind, qLat, qLon, radiusMeters)
         return File(File(dir, "overpass").apply { mkdirs() }, "$key.json")
     }
 
@@ -85,12 +228,12 @@ class OverpassClient(private val cacheDir: File? = null) {
      *  - on fetch failure → fall back to any existing cache file (even if stale),
      *    so the app survives 429s / offline; if there's no cache, rethrow.
      */
-    private fun cachedRaw(
+    private suspend fun cachedRaw(
         kind: String,
         center: GeoPoint,
         radiusMeters: Int,
         forceRefresh: Boolean,
-        fetch: () -> String,
+        fetch: suspend () -> String,
     ): String {
         val file = cacheFile(kind, center, radiusMeters)
 
@@ -104,9 +247,15 @@ class OverpassClient(private val cacheDir: File? = null) {
             val raw = fetch()
             if (file != null) runCatching { file.writeText(raw) } // best-effort write-through
             raw
+        } catch (e: CancellationException) {
+            throw e // a newer load superseded this one — don't mask it as a network failure
         } catch (e: Exception) {
-            if (file != null && file.exists()) file.readText() // stale fallback
-            else throw e
+            if (file != null && file.exists()) {
+                lastServedStale = true // the UI says so rather than passing old data off as new
+                file.readText()
+            } else {
+                throw e
+            }
         }
     }
 
@@ -156,11 +305,10 @@ class OverpassClient(private val cacheDir: File? = null) {
         """.trimIndent()
     }
 
-    /** Parse named park polygons from a raw Overpass response string. */
-    private fun parseParks(raw: String): List<Park> {
-        val response = json.decodeFromString<OverpassResponse>(raw)
+    /** Build named park polygons from already-parsed Overpass elements. */
+    private fun parseParks(elements: List<OverpassElement>): List<Park> {
         val parks = ArrayList<Park>()
-        for (el in response.elements) {
+        for (el in elements) {
             val name = el.tags["name"]?.trim()?.ifBlank { null } ?: continue
             val rings = ArrayList<List<GeoPoint>>()
             when (el.type) {
@@ -226,26 +374,72 @@ class OverpassClient(private val cacheDir: File? = null) {
         "https://overpass.private.coffee/api/interpreter",
     )
 
-    private fun post(query: String): String {
+    private suspend fun post(query: String): String {
+        // Pan-triggered loading can ask for a lot; these two brakes are what keep a public,
+        // shared, unauthenticated API from seeing a burst it would rightly 429.
+        if (System.currentTimeMillis() < rateLimitedUntil) {
+            throw IOException("Overpass rate-limited — using cached trails")
+        }
+        val sinceLast = System.currentTimeMillis() - lastNetworkAt
+        if (sinceLast in 0 until MIN_NETWORK_GAP_MS) delay(MIN_NETWORK_GAP_MS - sinceLast)
+        lastNetworkAt = System.currentTimeMillis()
+
         val body = FormBody.Builder().add("data", query).build()
         var lastError: Exception? = null
         for (url in endpoints) {
+            coroutineContext.ensureActive()
             try {
                 val req = Request.Builder()
                     .url(url)
                     .header("User-Agent", "trailmap-android/1.0 (+https://github.com/Pr0zak/trailmap)")
                     .post(body)
                     .build()
-                client.newCall(req).execute().use { resp ->
-                    if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
-                    return resp.body?.string() ?: throw IOException("empty response")
-                }
+                return client.newCall(req).awaitBody()
+            } catch (e: CancellationException) {
+                throw e // the caller moved on; don't burn the remaining mirrors
+            } catch (e: RateLimited) {
+                rateLimitedUntil = System.currentTimeMillis() + RATE_LIMIT_COOLDOWN_MS
+                lastError = e // try the next mirror, but stop asking this one for a while
             } catch (e: Exception) {
                 lastError = e // rate-limited or unreachable → try the next mirror
             }
         }
         throw lastError ?: IOException("all Overpass endpoints failed")
     }
+
+    /**
+     * Await an OkHttp call as a suspend function, cancelling the in-flight HTTP request when
+     * the coroutine is cancelled. Panning the map supersedes loads constantly, and a blocking
+     * `execute()` would keep downloading a multi-megabyte response nobody is going to read.
+     */
+    private suspend fun Call.awaitBody(): String = suspendCancellableCoroutine { cont ->
+        cont.invokeOnCancellation { runCatching { cancel() } }
+        enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (!cont.isCancelled) cont.resumeWithException(e)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use { resp ->
+                    if (cont.isCancelled) return
+                    if (resp.code == 429 || resp.code == 504) {
+                        cont.resumeWithException(RateLimited(resp.code))
+                        return
+                    }
+                    if (!resp.isSuccessful) {
+                        cont.resumeWithException(IOException("HTTP ${resp.code}"))
+                        return
+                    }
+                    val text = runCatching { resp.body?.string() }.getOrNull()
+                    if (text == null) cont.resumeWithException(IOException("empty response"))
+                    else cont.resume(text)
+                }
+            }
+        })
+    }
+
+    /** A mirror told us to back off (429), or buckled under load (504). */
+    private class RateLimited(code: Int) : IOException("Overpass busy (HTTP $code)")
 
     // --- DTOs ---
 
@@ -577,9 +771,19 @@ class OverpassClient(private val cacheDir: File? = null) {
 
     private companion object {
         /** Bump when the Overpass queries change so old cached responses are ignored. */
-        const val CACHE_SCHEMA = "v2"
+        const val CACHE_SCHEMA = "v4"
         /** Disk-cache freshness window: 7 days. */
         val CACHE_TTL_MS = TimeUnit.DAYS.toMillis(7)
+        /** Total size of the JSON behind the in-memory parse cache, before LRU eviction. */
+        const val MEMO_BUDGET_BYTES = 8L * 1024 * 1024
+        /** Backstop on entry count, so many tiny zoomed-in areas can't accumulate forever. */
+        const val MEMO_MAX_ENTRIES = 12
+        /** Minimum gap between requests actually put on the wire. */
+        const val MIN_NETWORK_GAP_MS = 1200L
+        /** How long to stop asking after a mirror returns 429/504. */
+        const val RATE_LIMIT_COOLDOWN_MS = 30_000L
+        /** Reuse the last MTB park set while the map stays within this fraction of its radius. */
+        const val PARK_REUSE_FRACTION = 0.5
         val BICYCLE_ALLOWED = setOf("yes", "designated", "permissive")
         val FOOT_ALLOWED = setOf("yes", "designated", "permissive")
         val WALK_HIGHWAYS = setOf("path", "footway", "track", "bridleway")

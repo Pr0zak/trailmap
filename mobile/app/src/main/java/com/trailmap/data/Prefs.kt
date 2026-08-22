@@ -22,6 +22,13 @@ class Prefs(context: Context) {
         sp.edit().putString(KEY_MAP_THEME, value).apply()
     }
 
+    /** Refetch trails automatically as the map is panned. Defaults on. */
+    fun autoLoadOnPan(): Boolean = sp.getBoolean(KEY_AUTO_LOAD, true)
+
+    fun setAutoLoadOnPan(on: Boolean) {
+        sp.edit().putBoolean(KEY_AUTO_LOAD, on).apply()
+    }
+
     fun rides(): List<Ride> =
         sp.getString(KEY_RIDES, null)?.let { raw ->
             runCatching { json.decodeFromString<List<Ride>>(raw) }.getOrDefault(emptyList())
@@ -34,6 +41,7 @@ class Prefs(context: Context) {
     private companion object {
         const val KEY_SAVED = "saved_trail_ids"
         const val KEY_MAP_THEME = "map_theme"
+        const val KEY_AUTO_LOAD = "auto_load_on_pan"
         const val KEY_RIDES = "rides"
     }
 }
