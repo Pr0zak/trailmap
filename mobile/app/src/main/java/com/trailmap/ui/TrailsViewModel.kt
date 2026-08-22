@@ -9,7 +9,6 @@ import com.trailmap.data.ElevationProfile
 import com.trailmap.data.Geo
 import com.trailmap.data.GeoPoint
 import com.trailmap.data.Locator
-import com.trailmap.data.OverpassClient
 import com.trailmap.data.Prefs
 import com.trailmap.data.Ride
 import com.trailmap.data.RideTrail
@@ -150,7 +149,7 @@ data class TrailsUiState(
 
 class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = Prefs(app)
-    private val overpass = OverpassClient(app.cacheDir, prefs)
+    private val overpass = com.trailmap.TrailmapApp.overpass(app)
     private val elevation = ElevationClient()
     private val locator = Locator(app)
 
@@ -725,14 +724,21 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         /** Refetch when zooming out needs a radius this many times what we already hold. */
         private const val ZOOM_OUT_FACTOR = 1.5
 
-        /** Coarse radius steps, so nearby viewports keep reusing the same cache keys. */
-        private val RADIUS_LADDER = intArrayOf(6000, 8000, 12000, 16000, 24000)
+        /**
+         * Coarse radius steps, so nearby viewports keep reusing the same cache keys. Every
+         * step is clamped into [MIN_FETCH_RADIUS]..[MAX_AUTO_RADIUS], which currently makes
+         * this a single value — kept as a ladder because the clamp is what enforces the size,
+         * and widening the range again should not mean restructuring the calculation.
+         */
+        private val RADIUS_LADDER = intArrayOf(16000)
 
         /**
-         * Largest circle we'll pull. Viable at this size only because the query asks for named
-         * ways: a 24 km unnamed-inclusive pull would be tens of megabytes.
+         * Largest circle we'll pull automatically. Sized for reliability rather than coverage:
+         * on-device logs put a 16 km named-way pull at ~1.45 MB, back in 3-7 s every time,
+         * against 3.1-3.8 MB for 24 km — which is what timed out. A wider view gets less
+         * ground covered, but it gets it.
          */
-        private const val MAX_AUTO_RADIUS = 24000
+        private const val MAX_AUTO_RADIUS = 16000
 
         /** Never fetch less than this, whatever the chip says — see [fetchRadiusFor]. */
         private const val MIN_FETCH_RADIUS = 16000
