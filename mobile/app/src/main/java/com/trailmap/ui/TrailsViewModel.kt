@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Map data mode: all trails (paved/gravel/dirt) vs mountain-bike trails only. */
 enum class MapMode { ALL, MTB }
@@ -281,6 +282,11 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 var attempt = 0
                 var fetched: TrailsResult? = null
                 var failure: Exception? = null
+                // Hard ceiling on the whole thing. Each mirror gets its own 45 s call timeout,
+                // and with three mirrors plus a retry a dead network could hold the "Loading
+                // trails" pill up for over two minutes — observed at 80 s with all three
+                // mirrors down. Better to say so quickly and leave the cached trails drawn.
+                withTimeoutOrNull(LOAD_BUDGET_MS) {
                 while (attempt < MAX_ATTEMPTS) {
                     try {
                         fetched = overpass.fetchTrails(center, radiusMeters, mtb = mtb, forceRefresh = force)
@@ -297,7 +303,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                         delay(RETRY_DELAY_MS)
                     }
                 }
-                val result = fetched ?: throw (failure ?: Exception("Failed to load trails"))
+                }
+                val result = fetched
+                    ?: throw (failure ?: java.io.IOException("Timed out reaching OpenStreetMap"))
                 val trails = result.trails
                 DiagLog.log(
                     "load",
@@ -417,6 +425,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     private fun loadErrorText(e: Exception, haveTrails: Boolean): String = when {
         e.isRateLimit && haveTrails -> "OpenStreetMap is rate-limiting — showing cached trails"
         e.isRateLimit -> "OpenStreetMap is rate-limiting — try again shortly"
+        e is java.io.InterruptedIOException || e.message?.contains("Timed out") == true ->
+            if (haveTrails) "OpenStreetMap isn't responding — showing what's cached"
+            else "OpenStreetMap isn't responding. Try again in a minute."
         haveTrails -> "Couldn't refresh trails — showing what's cached"
         else -> "Couldn't reach OpenStreetMap. Check your connection and try again."
     }
@@ -449,11 +460,18 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Does the data we hold still cover the screen? Refetching on how far the *centre* moved
-     * gets this wrong at both ends — at high zoom the user pans two screens into blank map
-     * before anything fires, and at low zoom a nudge refetches a circle that still leaves the
-     * edges empty. Asking how much of the visible rectangle has no data behind it is the
-     * question that actually matters, and it scales with zoom on its own.
+     * Has the map moved far enough off the loaded data to be worth asking again?
+     *
+     * This deliberately does *not* ask whether the loaded circle covers the screen. Past a
+     * certain zoom it never can — the screen is 166 km across and the widest circle the app
+     * will fetch is 24 km — so a coverage test is permanently unsatisfied and fires on every
+     * single camera idle. An on-device log showed exactly that: three refetches in two
+     * seconds while zoomed out, each cancelling the last mid-download, which is both why the
+     * map was perpetually "Loading trails" and how the app earned a rate-limit block.
+     *
+     * Distance moved is the honest question, and the threshold scales two ways: with the
+     * circle we hold, and — once the screen is wider than that circle — with the screen, so
+     * the refetch cadence stays proportional to how much ground a pan actually covers.
      *
      * While a load is in flight it is judged against the area *that* load will cover, so the
      * camera idles during a fetch don't queue up a duplicate of it.
@@ -469,12 +487,8 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         val have = if (inFlight != null) pendingRadius else s.loadedRadiusMeters
         // Zoomed out far enough that what we hold can no longer fill the screen.
         if (wantRadius > have * ZOOM_OUT_FACTOR) return true
-        val drift = Geo.haversineMeters(reference, center)
-        val uncovered = drift + viewRadius - have
-        // Coverage says the screen has holes; drift says we have actually gone somewhere new.
-        // Both are required: at a wide zoom the screen is permanently "uncovered", and the
-        // coverage test alone would refetch on every single camera idle.
-        return uncovered > viewRadius * EDGE_SLACK && drift > have * MIN_DRIFT_FRACTION
+        val threshold = maxOf(have * MIN_DRIFT_FRACTION, viewRadius * WIDE_DRIFT_FRACTION)
+        return Geo.haversineMeters(reference, center) > threshold
     }
 
     /**
@@ -686,8 +700,6 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         /** Hold the loading pill back this long so cache hits never flash it. */
         private const val SPINNER_DELAY_MS = 250L
 
-        /** Refetch once this fraction of the visible rectangle has no data behind it. */
-        private const val EDGE_SLACK = 0.4
 
         /** Fetch a little wider than the screen, so a small pan doesn't immediately re-fire. */
         private const val FETCH_MARGIN = 1.35
@@ -703,6 +715,12 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
 
         /** Refetch once the map has moved this fraction of the loaded radius. */
         private const val MIN_DRIFT_FRACTION = 0.35
+
+        /**
+         * At zooms where the screen is wider than any circle we'd fetch, the threshold scales
+         * with the screen instead — half a screen of panning, rather than one fetch per idle.
+         */
+        private const val WIDE_DRIFT_FRACTION = 0.5
 
         /** Refetch when zooming out needs a radius this many times what we already hold. */
         private const val ZOOM_OUT_FACTOR = 1.5
@@ -728,5 +746,8 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         /** Attempts per load, so a momentary 502/504 from Overpass isn't a dead end. */
         private const val MAX_ATTEMPTS = 2
         private const val RETRY_DELAY_MS = 2500L
+
+        /** Ceiling on one load, across every mirror and retry. */
+        private const val LOAD_BUDGET_MS = 25_000L
     }
 }
