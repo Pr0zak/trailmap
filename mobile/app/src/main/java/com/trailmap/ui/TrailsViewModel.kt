@@ -3,6 +3,7 @@ package com.trailmap.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.trailmap.data.DiagLog
 import com.trailmap.data.ElevationClient
 import com.trailmap.data.ElevationProfile
 import com.trailmap.data.Geo
@@ -16,6 +17,7 @@ import com.trailmap.data.SurfaceType
 import com.trailmap.data.ViewBounds
 import com.trailmap.data.Trail
 import com.trailmap.data.TrailSystem
+import com.trailmap.data.TrailsResult
 import com.trailmap.data.UseType
 import com.trailmap.data.clusterTrailSystems
 import kotlinx.coroutines.CancellationException
@@ -107,12 +109,19 @@ data class TrailsUiState(
     }
 
     /**
-     * In MTB mode, [filtered] grouped into nearby trail systems; empty otherwise.
+     * [filtered] narrowed to the radius chip. The map deliberately draws everything cached —
+     * a wider cached circle means panning inside it needs no refetch — but the Trails list
+     * has to keep the chip honest and not pad itself with the next town over.
+     */
+    val listed: List<Trail> by lazy { filtered.filter { it.distanceMeters <= radiusMeters } }
+
+    /**
+     * In MTB mode, [listed] grouped into nearby trail systems; empty otherwise.
      * Also `by lazy` — [clusterTrailSystems] is O(n²) in haversine distances, and the list
      * screen reads this property more than once per frame.
      */
     val systems: List<TrailSystem> by lazy {
-        if (mode == MapMode.MTB) clusterTrailSystems(filtered) else emptyList()
+        if (mode == MapMode.MTB) clusterTrailSystems(listed) else emptyList()
     }
 
     /**
@@ -139,10 +148,10 @@ data class TrailsUiState(
 }
 
 class TrailsViewModel(app: Application) : AndroidViewModel(app) {
-    private val overpass = OverpassClient(app.cacheDir)
+    private val prefs = Prefs(app)
+    private val overpass = OverpassClient(app.cacheDir, prefs)
     private val elevation = ElevationClient()
     private val locator = Locator(app)
-    private val prefs = Prefs(app)
 
     private val _state = MutableStateFlow(
         TrailsUiState(
@@ -236,6 +245,8 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         pendingCenter = center
         pendingRadius = radiusMeters
         loadJob = viewModelScope.launch {
+            val started = android.os.SystemClock.elapsedRealtime()
+            DiagLog.log("load", "start r=$radiusMeters force=$force mode=${_state.value.mode}")
             _state.update { it.copy(error = null, center = center) }
             // Hold the spinner back briefly: an area that's already parsed in memory comes
             // back in well under this, and flashing a pill for it reads as churn.
@@ -248,7 +259,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 // One retry turns most of those into a successful load instead of an error
                 // banner the user can only clear by panning somewhere else.
                 var attempt = 0
-                var fetched: List<Trail>? = null
+                var fetched: TrailsResult? = null
                 var failure: Exception? = null
                 while (attempt < MAX_ATTEMPTS) {
                     try {
@@ -266,7 +277,13 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                         delay(RETRY_DELAY_MS)
                     }
                 }
-                val trails = fetched ?: throw (failure ?: Exception("Failed to load trails"))
+                val result = fetched ?: throw (failure ?: Exception("Failed to load trails"))
+                val trails = result.trails
+                DiagLog.log(
+                    "load",
+                    "done in ${android.os.SystemClock.elapsedRealtime() - started} ms, " +
+                        "${trails.size} trails, covers ${result.servedRadius} m",
+                )
                 spinner.cancel()
                 if (seq != loadSeq) return@launch // a newer load already won
                 _state.update { s ->
@@ -275,7 +292,10 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                         trails = trails,
                         trailsVersion = s.trailsVersion + 1,
                         loadedCenter = center,
-                        loadedRadiusMeters = radiusMeters,
+                        // The radius the data actually covers, which a wider cached circle can
+                        // exceed. Recording what was *asked* for made the app think it held
+                        // 5 mi when it held 15, and refetch far sooner than it needed to.
+                        loadedRadiusMeters = result.servedRadius,
                         viewportStale = false,
                         servingStale = overpass.lastServedStale,
                         // Keep the peek card open only if the tapped trail survived the reload.
@@ -288,6 +308,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 spinner.cancel()
                 if (seq != loadSeq) return@launch
                 // Keep the trails already on screen; only surface the error.
+                DiagLog.log("load", "failed after ${android.os.SystemClock.elapsedRealtime() - started} ms: ${e.message}")
                 _state.update { it.copy(loading = false, error = loadErrorText(e, it.trails.isNotEmpty())) }
             } finally {
                 if (seq == loadSeq) pendingCenter = null
@@ -339,6 +360,14 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         // staring at a blank metro-wide map, which is strictly worse than partial coverage.
         val canCover = fetchR >= viewR * COVER_RATIO
         _state.update { it.copy(viewBounds = bounds, viewportStale = stale, canAutoCover = canCover) }
+        if (stale) {
+            DiagLog.log(
+                "camera",
+                "idle z=%.1f screen=%.0f m want=%d m have=%d m → refetch".format(
+                    bounds.zoom, viewR, fetchR, prev.loadedRadiusMeters,
+                ),
+            )
+        }
 
         if (!stale || !prev.autoLoadOnPan || bounds.zoom < HARD_ZOOM_FLOOR) return
         panJob?.cancel()
@@ -388,7 +417,11 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         if (s.mode == MapMode.MTB) return s.radiusMeters
         val want = viewRadius * FETCH_MARGIN
         val stepped = RADIUS_LADDER.firstOrNull { it >= want } ?: MAX_AUTO_RADIUS
-        return stepped.coerceIn(s.radiusMeters, maxOf(MAX_AUTO_RADIUS, s.radiusMeters))
+        // Floor is MIN_FETCH_RADIUS, not the chip. The chip says how much the user wants
+        // *listed*; how much to download is a different question, and fetching only 5 mi
+        // meant a single flick-pan left the loaded circle and paid for another round trip.
+        // A named-way pull at this radius is ~1.5 MB and covers a lot of panning.
+        return stepped.coerceIn(maxOf(MIN_FETCH_RADIUS, s.radiusMeters), MAX_AUTO_RADIUS)
     }
 
     /**
@@ -433,9 +466,16 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
             val circles = coverCircles(bounds)
             var failed = 0
             _state.update { it.copy(trailPrefetch = "Trails 0/${circles.size}") }
+            var lastError: String? = null
             circles.forEachIndexed { i, c ->
-                runCatching { overpass.prefetch(c, MAX_AUTO_RADIUS, mtb) }
-                    .onFailure { e -> if (e is CancellationException) throw e else failed++ }
+                if (!overpass.hasArea(c, MAX_AUTO_RADIUS, mtb)) {
+                    runCatching { overpass.prefetch(c, MAX_AUTO_RADIUS, mtb) }
+                        .onFailure { e ->
+                            if (e is CancellationException) throw e
+                            failed++
+                            lastError = e.message
+                        }
+                }
                 _state.update { it.copy(trailPrefetch = "Trails ${i + 1}/${circles.size}") }
             }
             _state.update {
@@ -443,7 +483,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                     trailPrefetch = when {
                         failed == 0 -> "Trails saved for offline use"
                         failed < circles.size -> "Trails partly saved (${circles.size - failed}/${circles.size})"
-                        else -> "Couldn't download trails for this area"
+                        else -> "Couldn't download trails: ${lastError ?: "network error"}"
                     },
                 )
             }
@@ -651,6 +691,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
          * ways: a 24 km unnamed-inclusive pull would be tens of megabytes.
          */
         private const val MAX_AUTO_RADIUS = 24000
+
+        /** Never fetch less than this, whatever the chip says — see [fetchRadiusFor]. */
+        private const val MIN_FETCH_RADIUS = 16000
 
         /**
          * Ceiling on circles per offline area. Each is a few megabytes off a shared public API,

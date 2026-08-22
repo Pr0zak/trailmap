@@ -54,6 +54,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.trailmap.data.DiagLog
 import com.trailmap.data.SurfaceType
 import com.trailmap.data.Trail
 import kotlinx.coroutines.Dispatchers
@@ -143,9 +144,11 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
     // dispatcher — a Kansas City pull is ~30k coordinates and would jank the frame here.
     LaunchedEffect(ui.filterKey, styleRef.value) {
         val style = styleRef.value ?: return@LaunchedEffect
+        val t0 = android.os.SystemClock.elapsedRealtime()
         val fc = withContext(Dispatchers.Default) { trailsFc(ui.filtered) }
         if (styleRef.value !== style) return@LaunchedEffect // theme flipped mid-build
         style.getSourceAs<GeoJsonSource>(SRC_TRAILS)?.setGeoJson(fc)
+        DiagLog.log("map", "drew ${ui.filtered.size} trails, ${fc.length / 1024} KB in ${android.os.SystemClock.elapsedRealtime() - t0} ms")
     }
 
     // Highlight the selected trail (or clear the highlight when nothing is selected).

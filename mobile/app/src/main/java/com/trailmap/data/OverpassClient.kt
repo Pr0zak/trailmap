@@ -1,10 +1,13 @@
 package com.trailmap.data
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -31,7 +34,16 @@ import kotlin.math.cos
  * `<cacheDir>/overpass`. Repeat loads of an area are served from disk (instant,
  * no network) and, if the network fails, a stale cached copy is returned.
  */
-class OverpassClient(private val cacheDir: File? = null) {
+/** Trails for an area, plus the radius the data actually covers. */
+class TrailsResult(val trails: List<Trail>, val servedRadius: Int)
+
+class OverpassClient(private val cacheDir: File? = null, private val prefs: Prefs? = null) {
+
+    /** Scope for background cache refreshes, which outlive the load that triggered them. */
+    private val refreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** Areas with a refresh already in flight, so a burst of pans queues only one. */
+    private val refreshing = HashSet<String>()
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -75,15 +87,20 @@ class OverpassClient(private val cacheDir: File? = null) {
      * keep paying a failed round-trip to a broken one ahead of it in the list.
      */
     @Volatile
-    private var preferredEndpoint: String? = null
+    private var preferredEndpoint: String? = prefs?.preferredEndpoint()
 
     /**
      * Pull an area into the disk cache for offline use. Downloading an offline region used to
      * fetch basemap tiles only, so the map worked out of signal with no trails drawn on it.
      */
     suspend fun prefetch(center: GeoPoint, radiusMeters: Int, mtb: Boolean) {
+        DiagLog.log("offline", "prefetch %.4f,%.4f r=%d".format(center.lat, center.lon, radiusMeters))
         fetchTrails(center, radiusMeters, mtb = mtb, forceRefresh = false)
     }
+
+    /** True if this exact area is already on disk, so a prefetch can skip it. */
+    fun hasArea(center: GeoPoint, radiusMeters: Int, mtb: Boolean): Boolean =
+        coveringCache(if (mtb) "mtb" else "all", center, radiusMeters) != null
 
     /**
      * True when this (center, radius) can be served without touching the network — the caller
@@ -100,7 +117,7 @@ class OverpassClient(private val cacheDir: File? = null) {
         radiusMeters: Int,
         mtb: Boolean = false,
         forceRefresh: Boolean = false,
-    ): List<Trail> =
+    ): TrailsResult =
         withContext(Dispatchers.IO) {
             lastServedStale = false
             pruneCacheOnce()
@@ -114,23 +131,15 @@ class OverpassClient(private val cacheDir: File? = null) {
                 val parks = runCatching { parksFor(center, radiusMeters, forceRefresh) }
                     .getOrElse { if (it is CancellationException) throw it else emptyList() }
                 coroutineContext.ensureActive()
-                trimTo(buildMtbTrails(e.elements, center, parks), radiusMeters, e.radius)
+                TrailsResult(buildMtbTrails(e.elements, center, parks), e.radius)
             } else {
                 val e = elementsFor(
                     "all", center, radiusMeters, forceRefresh, buildQuery(center, radiusMeters),
                 )
                 coroutineContext.ensureActive()
-                trimTo(buildTrails(e.elements, center), radiusMeters, e.radius)
+                TrailsResult(buildTrails(e.elements, center), e.radius)
             }
         }
-
-    /**
-     * When a wider cached pull answered a narrower request, drop the trails outside the radius
-     * that was asked for — otherwise the "5 mi" chip would quietly list trails from the next
-     * town over just because they happened to share a cache entry.
-     */
-    private fun trimTo(trails: List<Trail>, requested: Int, served: Int): List<Trail> =
-        if (served <= requested) trails else trails.filter { it.distanceMeters <= requested }
 
     private fun parseResponse(raw: String): OverpassResponse =
         runCatching { json.decodeFromString<OverpassResponse>(raw) }
@@ -184,14 +193,23 @@ class OverpassClient(private val cacheDir: File? = null) {
     ): Elements {
         // Work out which file would answer this before touching the disk, so a memo hit skips
         // the multi-megabyte read as well as the parse.
+        val t0 = System.currentTimeMillis()
         val source = if (forceRefresh) null else coveringCache(kind, center, radiusMeters)
         if (source != null) {
-            synchronized(memo) { memo[source.file.name] }
-                ?.let { return Elements(it.elements, source.radius) }
+            synchronized(memo) { memo[source.file.name] }?.let {
+                DiagLog.log("cache", "$kind memory hit, covers ${source.radius} m (asked $radiusMeters)")
+                return Elements(it.elements, source.radius)
+            }
         }
         val raw = cachedRaw(kind, center, radiusMeters, forceRefresh) { post(query) }
         coroutineContext.ensureActive()
         val parsed = parseResponse(raw.text).elements
+        DiagLog.log(
+            "cache",
+            "$kind ${if (source != null) "disk hit" else "network"}, covers ${raw.radius} m " +
+                "(asked $radiusMeters), ${raw.text.length / 1024} KB, ${parsed.size} elements, " +
+                "${System.currentTimeMillis() - t0} ms",
+        )
         val key = source?.file?.name ?: cacheFile(kind, center, raw.radius)?.name
         if (key != null) memoPut(key, Memoized(parsed, raw.text.length))
         return Elements(parsed, raw.radius)
@@ -311,9 +329,13 @@ class OverpassClient(private val cacheDir: File? = null) {
         val file = cacheFile(kind, center, radiusMeters)
         val covering = if (forceRefresh) null else coveringCache(kind, center, radiusMeters)
 
-        if (covering != null &&
-            System.currentTimeMillis() - covering.file.lastModified() < CACHE_TTL_MS
-        ) {
+        if (covering != null) {
+            // Serve what we have straight away, expired or not, and refresh behind the scenes
+            // if it is past the TTL. Trail geometry barely changes week to week, and making
+            // the user watch a spinner for data already on the device is the whole complaint.
+            if (System.currentTimeMillis() - covering.file.lastModified() >= CACHE_TTL_MS) {
+                scheduleRefresh(kind, center, radiusMeters, fetch)
+            }
             return Raw(covering.file.readText(), covering.radius)
         }
 
@@ -328,6 +350,7 @@ class OverpassClient(private val cacheDir: File? = null) {
             val stale = covering
                 ?: file?.takeIf { it.exists() }?.let { CachedCircle(it, center, radiusMeters) }
             if (stale != null) {
+                DiagLog.log("cache", "$kind fetch failed (${e.message}), serving stale ${stale.radius} m copy")
                 lastServedStale = true // the UI says so rather than passing old data off as new
                 Raw(stale.file.readText(), stale.radius)
             } else {
@@ -344,6 +367,27 @@ class OverpassClient(private val cacheDir: File? = null) {
      * / 416 KB with no visible difference. If unnamed connectors are ever wanted on the map,
      * this filter and that one have to come off together.
      */
+    /** Re-fetch an expired area in the background and write it through to the cache. */
+    private fun scheduleRefresh(
+        kind: String,
+        center: GeoPoint,
+        radiusMeters: Int,
+        fetch: suspend () -> String,
+    ) {
+        val file = cacheFile(kind, center, radiusMeters) ?: return
+        synchronized(refreshing) { if (!refreshing.add(file.name)) return }
+        refreshScope.launch {
+            try {
+                val raw = fetch()
+                runCatching { file.writeText(raw) }
+            } catch (_: Exception) {
+                // Offline or blocked; the stale copy we already served stands.
+            } finally {
+                synchronized(refreshing) { refreshing.remove(file.name) }
+            }
+        }
+    }
+
     private fun buildQuery(center: GeoPoint, radiusMeters: Int): String {
         val r = radiusMeters
         val lat = center.lat
@@ -483,16 +527,29 @@ class OverpassClient(private val cacheDir: File? = null) {
                     .header("User-Agent", "trailmap-android/1.0 (+https://github.com/Pr0zak/trailmap)")
                     .post(body)
                     .build()
-                return client.newCall(req).awaitBody().also { preferredEndpoint = url }
+                val t = System.currentTimeMillis()
+                return client.newCall(req).awaitBody().also {
+                    if (preferredEndpoint != url) {
+                        preferredEndpoint = url
+                        prefs?.setPreferredEndpoint(url)
+                    }
+                    DiagLog.log(
+                        "http",
+                        "${java.net.URI(url).host} OK ${it.length / 1024} KB in " +
+                            "${System.currentTimeMillis() - t} ms",
+                    )
+                }
             } catch (e: CancellationException) {
                 throw e // the caller moved on; don't burn the remaining mirrors
             } catch (e: RateLimited) {
                 synchronized(cooldownUntil) {
                     cooldownUntil[url] = System.currentTimeMillis() + RATE_LIMIT_COOLDOWN_MS
                 }
+                DiagLog.log("http", "${java.net.URI(url).host} rate-limited, cooling down 30 s")
                 lastError = e // move on, and stop asking *this* mirror for a while
             } catch (e: Exception) {
-                lastError = e // rate-limited or unreachable → try the next mirror
+                DiagLog.log("http", "${java.net.URI(url).host} failed: ${e.javaClass.simpleName} ${e.message}")
+                lastError = e // unreachable or erroring → try the next mirror
             }
         }
         throw lastError ?: IOException("all Overpass endpoints failed")

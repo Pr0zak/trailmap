@@ -29,6 +29,13 @@ class Prefs(context: Context) {
         sp.edit().putBoolean(KEY_AUTO_LOAD, on).apply()
     }
 
+    /** Overpass mirror that last answered, so a dead primary isn't re-tried on every launch. */
+    fun preferredEndpoint(): String? = sp.getString(KEY_ENDPOINT, null)
+
+    fun setPreferredEndpoint(url: String) {
+        sp.edit().putString(KEY_ENDPOINT, url).apply()
+    }
+
     fun rides(): List<Ride> =
         sp.getString(KEY_RIDES, null)?.let { raw ->
             runCatching { json.decodeFromString<List<Ride>>(raw) }.getOrDefault(emptyList())
@@ -42,6 +49,7 @@ class Prefs(context: Context) {
         const val KEY_SAVED = "saved_trail_ids"
         const val KEY_MAP_THEME = "map_theme"
         const val KEY_AUTO_LOAD = "auto_load_on_pan"
+        const val KEY_ENDPOINT = "preferred_endpoint"
         const val KEY_RIDES = "rides"
     }
 }

@@ -68,7 +68,7 @@ private val PRESETS = listOf(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit) {
+fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: () -> Unit = {}) {
     val context = LocalContext.current
     val ui by vm.state.collectAsStateWithLifecycle()
 
@@ -228,6 +228,19 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit) {
                         modifier = Modifier.padding(vertical = 8.dp),
                     )
                 }
+            }
+
+            item {
+                Spacer(Modifier.height(20.dp))
+                OutlinedButton(onClick = onOpenDiagnostics, modifier = Modifier.fillMaxWidth()) {
+                    Text("Diagnostics")
+                }
+                Text(
+                    "What each load did and how long it took — share it if something is slow.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
+                )
             }
 
             items(areas, key = { it.region.id }) { area ->

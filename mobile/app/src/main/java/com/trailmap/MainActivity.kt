@@ -35,6 +35,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.trailmap.ui.DiagnosticsScreen
 import com.trailmap.ui.MapScreen
 import com.trailmap.ui.OfflineScreen
 import com.trailmap.ui.RideDetailScreen
@@ -127,7 +128,14 @@ private fun TrailmapRoot() {
                 RideDetailScreen(vm, id, onBack = { nav.popBackStack() }, onOpenTrail = { tid -> nav.navigate("detail/$tid") })
             }
             composable("offline") {
-                OfflineScreen(vm, onBack = { nav.popBackStack() })
+                OfflineScreen(
+                    vm,
+                    onBack = { nav.popBackStack() },
+                    onOpenDiagnostics = { nav.navigate("diagnostics") },
+                )
+            }
+            composable("diagnostics") {
+                DiagnosticsScreen(onBack = { nav.popBackStack() })
             }
             composable("detail/{id}") { entry ->
                 val id = entry.arguments?.getString("id").orEmpty()

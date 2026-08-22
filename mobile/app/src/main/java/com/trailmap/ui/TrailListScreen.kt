@@ -57,7 +57,8 @@ fun TrailListScreen(
     onShowOnMap: () -> Unit,
 ) {
     val ui by vm.state.collectAsStateWithLifecycle()
-    val trails = ui.filtered
+    // The list honours the radius chip; the map deliberately draws the wider cached set.
+    val trails = ui.listed
 
     Scaffold(
         topBar = {
