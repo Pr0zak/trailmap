@@ -78,13 +78,21 @@ class OverpassClient(private val cacheDir: File? = null) {
     private var preferredEndpoint: String? = null
 
     /**
+     * Pull an area into the disk cache for offline use. Downloading an offline region used to
+     * fetch basemap tiles only, so the map worked out of signal with no trails drawn on it.
+     */
+    suspend fun prefetch(center: GeoPoint, radiusMeters: Int, mtb: Boolean) {
+        fetchTrails(center, radiusMeters, mtb = mtb, forceRefresh = false)
+    }
+
+    /**
      * True when this (center, radius) can be served without touching the network — the caller
      * uses it to skip the ride-out-the-flick debounce for an area that will come back instantly.
      */
     fun isWarm(center: GeoPoint, radiusMeters: Int, mtb: Boolean): Boolean {
-        val file = cacheFile(if (mtb) "mtb" else "all", center, radiusMeters) ?: return false
-        synchronized(memo) { if (memo.containsKey(file.name)) return true }
-        return file.exists() && System.currentTimeMillis() - file.lastModified() < CACHE_TTL_MS
+        val hit = coveringCache(if (mtb) "mtb" else "all", center, radiusMeters) ?: return false
+        synchronized(memo) { if (memo.containsKey(hit.file.name)) return true }
+        return System.currentTimeMillis() - hit.file.lastModified() < CACHE_TTL_MS
     }
 
     suspend fun fetchTrails(
@@ -99,22 +107,30 @@ class OverpassClient(private val cacheDir: File? = null) {
             if (mtb) {
                 // Sequential (one Overpass request at a time) — firing both at once trips the
                 // public server's per-IP rate limit (429). Parks are best-effort.
-                val elements = elementsFor(
+                val e = elementsFor(
                     "mtb", center, radiusMeters, forceRefresh, buildMtbQuery(center, radiusMeters),
                 )
                 coroutineContext.ensureActive()
                 val parks = runCatching { parksFor(center, radiusMeters, forceRefresh) }
                     .getOrElse { if (it is CancellationException) throw it else emptyList() }
                 coroutineContext.ensureActive()
-                buildMtbTrails(elements, center, parks)
+                trimTo(buildMtbTrails(e.elements, center, parks), radiusMeters, e.radius)
             } else {
-                val elements = elementsFor(
+                val e = elementsFor(
                     "all", center, radiusMeters, forceRefresh, buildQuery(center, radiusMeters),
                 )
                 coroutineContext.ensureActive()
-                buildTrails(elements, center)
+                trimTo(buildTrails(e.elements, center), radiusMeters, e.radius)
             }
         }
+
+    /**
+     * When a wider cached pull answered a narrower request, drop the trails outside the radius
+     * that was asked for — otherwise the "5 mi" chip would quietly list trails from the next
+     * town over just because they happened to share a cache entry.
+     */
+    private fun trimTo(trails: List<Trail>, requested: Int, served: Int): List<Trail> =
+        if (served <= requested) trails else trails.filter { it.distanceMeters <= requested }
 
     private fun parseResponse(raw: String): OverpassResponse =
         runCatching { json.decodeFromString<OverpassResponse>(raw) }
@@ -157,22 +173,28 @@ class OverpassClient(private val cacheDir: File? = null) {
      * Parsed elements for one (kind, area), memo → disk → network in that order. A memo hit
      * skips the multi-megabyte file read as well as the parse.
      */
+    private class Elements(val elements: List<OverpassElement>, val radius: Int)
+
     private suspend fun elementsFor(
         kind: String,
         center: GeoPoint,
         radiusMeters: Int,
         forceRefresh: Boolean,
         query: String,
-    ): List<OverpassElement> {
-        val key = cacheFile(kind, center, radiusMeters)?.name
-        if (!forceRefresh && key != null) {
-            synchronized(memo) { memo[key] }?.let { return it.elements }
+    ): Elements {
+        // Work out which file would answer this before touching the disk, so a memo hit skips
+        // the multi-megabyte read as well as the parse.
+        val source = if (forceRefresh) null else coveringCache(kind, center, radiusMeters)
+        if (source != null) {
+            synchronized(memo) { memo[source.file.name] }
+                ?.let { return Elements(it.elements, source.radius) }
         }
         val raw = cachedRaw(kind, center, radiusMeters, forceRefresh) { post(query) }
         coroutineContext.ensureActive()
-        val parsed = parseResponse(raw).elements
-        if (key != null) memoPut(key, Memoized(parsed, raw.length))
-        return parsed
+        val parsed = parseResponse(raw.text).elements
+        val key = source?.file?.name ?: cacheFile(kind, center, raw.radius)?.name
+        if (key != null) memoPut(key, Memoized(parsed, raw.text.length))
+        return Elements(parsed, raw.radius)
     }
 
     /**
@@ -187,7 +209,8 @@ class OverpassClient(private val cacheDir: File? = null) {
         if (reusable) return lastParks
 
         val parks = parseParks(
-            elementsFor("parks", center, radiusMeters, forceRefresh, buildParkQuery(center, radiusMeters)),
+            elementsFor("parks", center, radiusMeters, forceRefresh, buildParkQuery(center, radiusMeters))
+                .elements,
         )
         lastParks = parks
         lastParksCenter = center
@@ -232,6 +255,45 @@ class OverpassClient(private val cacheDir: File? = null) {
         return File(File(dir, "overpass").apply { mkdirs() }, "$key.json")
     }
 
+    /** A response already on disk, described by the circle it covers. */
+    private class CachedCircle(val file: File, val center: GeoPoint, val radius: Int)
+
+    /** Parse `v5_all_39.09450_-94.57901_8000.json` back into the circle it holds. */
+    private fun parseCacheName(kind: String, f: File): CachedCircle? {
+        val parts = f.name.removeSuffix(".json").split('_')
+        if (parts.size != 5 || parts[0] != CACHE_SCHEMA || parts[1] != kind) return null
+        val lat = parts[2].toDoubleOrNull() ?: return null
+        val lon = parts[3].toDoubleOrNull() ?: return null
+        val radius = parts[4].toIntOrNull() ?: return null
+        return CachedCircle(f, GeoPoint(lat, lon), radius)
+    }
+
+    /**
+     * The cached response that best covers the requested circle — any file whose own circle
+     * fully contains it. Overpass `around:` returns everything inside the radius, so a wider
+     * pull is a strict superset of a narrower one centred anywhere inside it.
+     *
+     * Without this the cache could only ever hit an exact centre-and-radius key, which meant
+     * a downloaded area bought nothing: pan a few hundred metres, ask for a slightly different
+     * centre, and it was a fresh download of data already on the device. The tightest cover
+     * wins — least to parse, and closest to what was actually asked for.
+     */
+    private fun coveringCache(kind: String, center: GeoPoint, radiusMeters: Int): CachedCircle? {
+        val dir = cacheDir?.let { File(it, "overpass") } ?: return null
+        var best: CachedCircle? = null
+        for (f in dir.listFiles() ?: return null) {
+            val c = parseCacheName(kind, f) ?: continue
+            if (c.radius < radiusMeters) continue
+            if (Geo.haversineMeters(c.center, center) + radiusMeters > c.radius) continue
+            val b = best
+            if (b == null || c.radius < b.radius) best = c
+        }
+        return best
+    }
+
+    /** A raw response plus the radius it actually covers (which may exceed what was asked). */
+    private class Raw(val text: String, val radius: Int)
+
     /**
      * Cache-first wrapper around a network [fetch]:
      *  - fresh (< 7-day TTL) cache file & not [forceRefresh] → return it, no network.
@@ -245,25 +307,29 @@ class OverpassClient(private val cacheDir: File? = null) {
         radiusMeters: Int,
         forceRefresh: Boolean,
         fetch: suspend () -> String,
-    ): String {
+    ): Raw {
         val file = cacheFile(kind, center, radiusMeters)
+        val covering = if (forceRefresh) null else coveringCache(kind, center, radiusMeters)
 
-        if (!forceRefresh && file != null && file.exists() &&
-            System.currentTimeMillis() - file.lastModified() < CACHE_TTL_MS
+        if (covering != null &&
+            System.currentTimeMillis() - covering.file.lastModified() < CACHE_TTL_MS
         ) {
-            return file.readText()
+            return Raw(covering.file.readText(), covering.radius)
         }
 
         return try {
             val raw = fetch()
             if (file != null) runCatching { file.writeText(raw) } // best-effort write-through
-            raw
+            Raw(raw, radiusMeters)
         } catch (e: CancellationException) {
             throw e // a newer load superseded this one — don't mask it as a network failure
         } catch (e: Exception) {
-            if (file != null && file.exists()) {
+            // Offline, or blocked: an expired copy that covers the area still beats a blank map.
+            val stale = covering
+                ?: file?.takeIf { it.exists() }?.let { CachedCircle(it, center, radiusMeters) }
+            if (stale != null) {
                 lastServedStale = true // the UI says so rather than passing old data off as new
-                file.readText()
+                Raw(stale.file.readText(), stale.radius)
             } else {
                 throw e
             }

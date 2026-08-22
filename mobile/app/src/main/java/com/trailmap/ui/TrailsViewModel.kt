@@ -39,7 +39,7 @@ data class CameraTarget(val point: GeoPoint, val zoom: Double? = null)
 data class TrailsUiState(
     val center: GeoPoint = Locator.KANSAS_CITY,
     /** The radius chip: how much trail the user wants around them. A floor for any fetch. */
-    val radiusMeters: Int = 8000,
+    val radiusMeters: Int = (5 * 1609.344).toInt(),
     val mode: MapMode = MapMode.ALL,
     val loading: Boolean = false,
     val error: String? = null,
@@ -82,6 +82,8 @@ data class TrailsUiState(
     val canAutoCover: Boolean = true,
     /** Set when the trails on screen came from an expired cache because the network failed. */
     val servingStale: Boolean = false,
+    /** Progress of the trail-data download that accompanies an offline area; null when idle. */
+    val trailPrefetch: String? = null,
 ) {
     val radiusMiles: Double get() = radiusMeters / 1609.344
 
@@ -144,7 +146,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _state = MutableStateFlow(
         TrailsUiState(
-            radiusMeters = 8000, // ALL mode default ~5 mi (wide enough to catch parkway/bike routes)
+            radiusMeters = DEFAULT_ALL_RADIUS,
             savedIds = prefs.savedIds(),
             mapTheme = runCatching { MapTheme.valueOf(prefs.mapTheme()) }.getOrDefault(MapTheme.SYSTEM),
             rides = prefs.rides(),
@@ -162,6 +164,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The pending debounced pan reload. */
     private var panJob: Job? = null
+
+    /** The in-progress offline trail-data download. */
+    private var prefetchJob: Job? = null
 
     /** Monotonic load counter — a response whose sequence is stale never reaches the UI. */
     private var loadSeq = 0
@@ -296,13 +301,14 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         load(_state.value.center, meters)
     }
 
-    /** Radius selector in miles (used by MTB mode: 10 / 25 / 40 mi). */
-    fun setRadiusMiles(miles: Int) = setRadius((miles * 1609.344).toInt())
+    /** Radius selector in miles. Must agree exactly with the defaults, or re-selecting the
+     *  chip that is already active counts as a change and refetches. */
+    fun setRadiusMiles(miles: Int) = setRadius(milesToMeters(miles))
 
     /** Switch ALL ↔ MTB. MTB defaults to a wide 25-mi radius; ALL to ~5 mi. */
     fun setMode(mode: MapMode) {
         if (_state.value.mode == mode) return
-        val radius = if (mode == MapMode.MTB) (25 * 1609.344).toInt() else 8000
+        val radius = if (mode == MapMode.MTB) milesToMeters(25) else DEFAULT_ALL_RADIUS
         _state.update { it.copy(mode = mode, radiusMeters = radius, selectedTrailId = null) }
         load(_state.value.center, radius)
     }
@@ -412,6 +418,68 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         // Both are required: at a wide zoom the screen is permanently "uncovered", and the
         // coverage test alone would refetch on every single camera idle.
         return uncovered > viewRadius * EDGE_SLACK && drift > have * MIN_DRIFT_FRACTION
+    }
+
+    /**
+     * Download the trail data for an offline area, so a downloaded region has trails on it and
+     * not just basemap tiles. The bbox is covered with overlapping circles at the widest radius
+     * the app ever fetches; because the cache serves any request a stored circle contains, one
+     * of these covers every later pan and zoom inside the area.
+     */
+    fun prefetchTrailsFor(bounds: ViewBounds) {
+        val mtb = _state.value.mode == MapMode.MTB
+        prefetchJob?.cancel()
+        prefetchJob = viewModelScope.launch {
+            val circles = coverCircles(bounds)
+            var failed = 0
+            _state.update { it.copy(trailPrefetch = "Trails 0/${circles.size}") }
+            circles.forEachIndexed { i, c ->
+                runCatching { overpass.prefetch(c, MAX_AUTO_RADIUS, mtb) }
+                    .onFailure { e -> if (e is CancellationException) throw e else failed++ }
+                _state.update { it.copy(trailPrefetch = "Trails ${i + 1}/${circles.size}") }
+            }
+            _state.update {
+                it.copy(
+                    trailPrefetch = when {
+                        failed == 0 -> "Trails saved for offline use"
+                        failed < circles.size -> "Trails partly saved (${circles.size - failed}/${circles.size})"
+                        else -> "Couldn't download trails for this area"
+                    },
+                )
+            }
+        }
+    }
+
+    fun clearTrailPrefetch() = _state.update { it.copy(trailPrefetch = null) }
+
+    /**
+     * Circle centres covering [b]. A circle of radius r covers a square of side r·√2, so a
+     * grid step a little under that tiles the box with slight overlap and no gaps.
+     */
+    private fun coverCircles(b: ViewBounds): List<GeoPoint> {
+        val stepMeters = MAX_AUTO_RADIUS * 1.3
+        val latStep = stepMeters / 111_320.0
+        val midLat = (b.north + b.south) / 2.0
+        val midLon = (b.east + b.west) / 2.0
+        val lonStep = latStep / kotlin.math.cos(Math.toRadians(midLat)).coerceAtLeast(0.1)
+        // Grid centred on the box, not started from its corner: a box smaller than one step
+        // then gets a single circle centred on it, rather than one offset half a step away
+        // that leaves the area you actually care about out near the circle's edge.
+        val rows = maxOf(1, kotlin.math.ceil((b.north - b.south) / latStep).toInt())
+        val cols = maxOf(1, kotlin.math.ceil((b.east - b.west) / lonStep).toInt())
+        val out = ArrayList<GeoPoint>()
+        for (row in 0 until rows) {
+            for (col in 0 until cols) {
+                if (out.size >= MAX_PREFETCH_CIRCLES) return out
+                out.add(
+                    GeoPoint(
+                        midLat + (row - (rows - 1) / 2.0) * latStep,
+                        midLon + (col - (cols - 1) / 2.0) * lonStep,
+                    ),
+                )
+            }
+        }
+        return out
     }
 
     /** Manual "Search this area" — fetch trails around the current map viewport center. */
@@ -534,6 +602,11 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     companion object {
+        private fun milesToMeters(miles: Int) = (miles * 1609.344).toInt()
+
+        /** ALL-mode default: 5 mi, wide enough to catch parkway and bike routes. */
+        private val DEFAULT_ALL_RADIUS = milesToMeters(5)
+
         /** Zoom used when the camera is moved to the user's location. */
         const val DEFAULT_ZOOM = 12.5
 
@@ -578,6 +651,12 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
          * ways: a 24 km unnamed-inclusive pull would be tens of megabytes.
          */
         private const val MAX_AUTO_RADIUS = 24000
+
+        /**
+         * Ceiling on circles per offline area. Each is a few megabytes off a shared public API,
+         * so a state-wide box covers what it can and the UI reports how far it got.
+         */
+        private const val MAX_PREFETCH_CIRCLES = 12
 
         /** Attempts per load, so a momentary 502/504 from Overpass isn't a dead end. */
         private const val MAX_ATTEMPTS = 2

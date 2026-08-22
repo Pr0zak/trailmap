@@ -134,6 +134,9 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit) {
                                 status = s
                                 refresh()
                             }
+                            // Tiles alone give you a basemap with no trails on it; pull the
+                            // trail data for the same box so the area is actually usable.
+                            vm.prefetchTrailsFor(vb)
                             status = "Starting download…"
                             refresh()
                         }
@@ -154,9 +157,25 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit) {
                 status?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
                 }
+                ui.trailPrefetch?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
             }
 
             item {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Downloading an area saves both the basemap and the trails in it, so it "
+                        + "works with no signal.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
                 Spacer(Modifier.height(8.dp))
                 Text(
                     "Download a region",
@@ -177,6 +196,12 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit) {
                             status = s
                             refresh()
                         }
+                        vm.prefetchTrailsFor(
+                            com.trailmap.data.ViewBounds(
+                                north = preset.north, south = preset.south,
+                                east = preset.east, west = preset.west, zoom = preset.minZoom,
+                            ),
+                        )
                         status = "Starting ${preset.label} download…"
                         refresh()
                     },
