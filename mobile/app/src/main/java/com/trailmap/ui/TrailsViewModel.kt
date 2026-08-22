@@ -540,15 +540,22 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
      * grouped into invented "systems", and render under a legend headed "Difficulty" despite
      * carrying no mtb:scale at all.
      *
-     * Newest wins on an id collision: the same named trail pulled inside a wider circle
-     * carries more of its member ways. Distances are left untouched — recomputing them walks
-     * every vertex, which is worth doing on a load but not on a mode toggle.
+     * The longest copy wins on an id collision, since a wider circle catches more of a named
+     * trail's member ways. Distances are left untouched — recomputing them walks every vertex,
+     * which is worth doing on a load but not on a mode toggle.
      */
     private fun unionFor(mtb: Boolean): List<Trail> {
         val byId = LinkedHashMap<String, Trail>()
         for (area in loadedAreas) {
             if (area.mtb != mtb) continue
-            for (t in area.trails) byId[t.id] = t
+            for (t in area.trails) {
+                // Keep the most complete copy, not the most recent one. A named trail is
+                // assembled from however many of its member ways a circle happened to catch,
+                // so the same id can arrive shorter from a circle that only clipped its end —
+                // and letting that win made long trails visibly shrink as you panned.
+                val held = byId[t.id]
+                if (held == null || t.lengthMeters > held.lengthMeters) byId[t.id] = t
+            }
         }
         return byId.values.sortedBy { it.distanceMeters }
     }
