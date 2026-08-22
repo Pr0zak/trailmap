@@ -106,6 +106,17 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
         coveringCache(if (mtb) "mtb" else "all", center, radiusMeters) != null
 
     /**
+     * The circle that would answer this request from cache, or null if it needs the network.
+     *
+     * Lets the caller notice that a "refetch" would hand back the data it is already showing,
+     * which is otherwise a livelock: the gate measures distance from the loaded circle's
+     * centre, a cached circle keeps its own centre no matter who asks, so once the map is far
+     * enough from that centre every camera idle refetches the same file forever.
+     */
+    fun cachedCircleFor(center: GeoPoint, radiusMeters: Int, mtb: Boolean): Pair<GeoPoint, Int>? =
+        coveringCache(if (mtb) "mtb" else "all", center, radiusMeters)?.let { it.center to it.radius }
+
+    /**
      * True when this (center, radius) can be served without touching the network — the caller
      * uses it to skip the ride-out-the-flick debounce for an area that will come back instantly.
      */

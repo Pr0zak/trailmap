@@ -313,11 +313,16 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 spinner.cancel()
                 if (seq != loadSeq) return@launch // a newer load already won
+                // Identical served circle means identical geometry — only the per-trail
+                // distances change, which the map doesn't draw. Leaving trailsVersion alone
+                // spares a full GeoJSON rebuild and upload for no visible difference.
+                val sameCircle = result.servedCenter == _state.value.loadedCenter &&
+                    result.servedRadius == _state.value.loadedRadiusMeters
                 _state.update { s ->
                     s.copy(
                         loading = false,
                         trails = trails,
-                        trailsVersion = s.trailsVersion + 1,
+                        trailsVersion = if (sameCircle) s.trailsVersion else s.trailsVersion + 1,
                         // The circle the data actually covers, which is not always the one
                         // asked for: a cached pull can answer a nearby request. Recording the
                         // request instead made the app think it held 5 mi when it held 15, and
@@ -391,16 +396,31 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         // staring at a blank metro-wide map, which is strictly worse than partial coverage.
         val canCover = fetchR >= viewR * COVER_RATIO
         _state.update { it.copy(viewBounds = bounds, viewportStale = stale, canAutoCover = canCover) }
-        if (stale) {
+        if (!stale || !prev.autoLoadOnPan || bounds.zoom < HARD_ZOOM_FLOOR) return
+        // Would this "refetch" just hand back what is already on screen? The gate measures
+        // distance from the loaded circle's centre, and a cached circle keeps its own centre
+        // however far the map wanders inside it — so without this check every camera idle
+        // re-reads the same file forever. A device log caught nine such loads in thirteen
+        // seconds, each one a cache hit returning identical data.
+        val wouldServe = overpass.cachedCircleFor(center, fetchR, prev.mode == MapMode.MTB)
+        if (wouldServe != null &&
+            wouldServe.first == prev.loadedCenter &&
+            wouldServe.second == prev.loadedRadiusMeters
+        ) {
             DiagLog.log(
                 "camera",
-                "idle z=%.1f screen=%.0f m want=%d m have=%d m → refetch".format(
-                    bounds.zoom, viewR, fetchR, prev.loadedRadiusMeters,
+                "idle z=%.1f screen=%.0f m — already covered by the loaded %d m area".format(
+                    bounds.zoom, viewR, prev.loadedRadiusMeters,
                 ),
             )
+            return
         }
-
-        if (!stale || !prev.autoLoadOnPan || bounds.zoom < HARD_ZOOM_FLOOR) return
+        DiagLog.log(
+            "camera",
+            "idle z=%.1f screen=%.0f m want=%d m have=%d m → refetch".format(
+                bounds.zoom, viewR, fetchR, prev.loadedRadiusMeters,
+            ),
+        )
         panJob?.cancel()
         panJob = viewModelScope.launch {
             // Revisiting an area already parsed in memory should feel immediate, so the
