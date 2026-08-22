@@ -26,7 +26,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** Map data mode: all trails (paved/gravel/dirt) vs mountain-bike trails only. */
@@ -198,6 +200,24 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     private var bootstrapped = false
 
     /**
+     * True while [bootstrap] is waiting on a location fix. Camera idles are ignored until it
+     * resolves: the fix can take seconds, and until [load] is called there is no pending
+     * circle for the gate to measure against, so the first idle would start a second load
+     * that the bootstrap immediately supersedes.
+     */
+    private var bootstrapPending = false
+
+    /**
+     * Recently loaded circles, oldest first. The map draws the union of these rather than
+     * whatever the last load returned — otherwise zooming out *removes* trails: the wide
+     * cached circle you were looking at gets replaced by a fresh 16 km one, which is a dot in
+     * the middle of an 89 km screen. Bounded, because each entry retains its geometry.
+     */
+    private val loadedAreas = ArrayDeque<LoadedArea>()
+
+    private class LoadedArea(val center: GeoPoint, val radius: Int, val trails: List<Trail>)
+
+    /**
      * Where the camera last settled. A plain field, not UI state: it is written on every
      * camera idle and must not cause a recomposition. The map reads it when it is recreated
      * (a tab switch disposes the composition) so returning to the Map tab restores the exact
@@ -219,10 +239,15 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     fun bootstrap() {
         if (bootstrapped) return
         bootstrapped = true
+        bootstrapPending = true
         viewModelScope.launch {
-            val here = locator.current()
-            _state.update { it.copy(center = here, focusTarget = CameraTarget(here, DEFAULT_ZOOM)) }
-            load(here, initialFetchRadius())
+            try {
+                val here = locator.current()
+                _state.update { it.copy(center = here, focusTarget = CameraTarget(here, DEFAULT_ZOOM)) }
+                load(here, initialFetchRadius())
+            } finally {
+                bootstrapPending = false
+            }
         }
     }
 
@@ -306,23 +331,28 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 val result = fetched
                     ?: throw (failure ?: java.io.IOException("Timed out reaching OpenStreetMap"))
                 val trails = result.trails
+
+                spinner.cancel()
+                if (seq != loadSeq) return@launch // a newer load already won
+                val sameCircle = result.servedCenter == _state.value.loadedCenter &&
+                    result.servedRadius == _state.value.loadedRadiusMeters
+                val merged = withContext(Dispatchers.Default) {
+                    mergeArea(result.servedCenter, result.servedRadius, trails, center)
+                }
+                // Identical circle and no new ground means identical geometry, so leave
+                // trailsVersion alone and spare a GeoJSON rebuild for no visible difference.
+                val unchanged = sameCircle && merged.size == _state.value.trails.size
                 DiagLog.log(
                     "load",
                     "done in ${android.os.SystemClock.elapsedRealtime() - started} ms, " +
-                        "${trails.size} trails, covers ${result.servedRadius} m",
+                        "${trails.size} trails in a ${result.servedRadius} m circle, " +
+                        "${merged.size} shown across ${loadedAreas.size} areas",
                 )
-                spinner.cancel()
-                if (seq != loadSeq) return@launch // a newer load already won
-                // Identical served circle means identical geometry — only the per-trail
-                // distances change, which the map doesn't draw. Leaving trailsVersion alone
-                // spares a full GeoJSON rebuild and upload for no visible difference.
-                val sameCircle = result.servedCenter == _state.value.loadedCenter &&
-                    result.servedRadius == _state.value.loadedRadiusMeters
                 _state.update { s ->
                     s.copy(
                         loading = false,
-                        trails = trails,
-                        trailsVersion = if (sameCircle) s.trailsVersion else s.trailsVersion + 1,
+                        trails = merged,
+                        trailsVersion = if (unchanged) s.trailsVersion else s.trailsVersion + 1,
                         // The circle the data actually covers, which is not always the one
                         // asked for: a cached pull can answer a nearby request. Recording the
                         // request instead made the app think it held 5 mi when it held 15, and
@@ -396,6 +426,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         // staring at a blank metro-wide map, which is strictly worse than partial coverage.
         val canCover = fetchR >= viewR * COVER_RATIO
         _state.update { it.copy(viewBounds = bounds, viewportStale = stale, canAutoCover = canCover) }
+        if (bootstrapPending) return // the startup load is about to claim this area
         if (!stale || !prev.autoLoadOnPan || bounds.zoom < HARD_ZOOM_FLOOR) return
         // Would this "refetch" just hand back what is already on screen? The gate measures
         // distance from the loaded circle's centre, and a cached circle keeps its own centre
@@ -429,6 +460,44 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
             delay(if (warm) PAN_DEBOUNCE_WARM_MS else PAN_DEBOUNCE_MS)
             load(center, fetchR)
         }
+    }
+
+    /**
+     * Fold a freshly loaded circle into [loadedAreas] and return the union, nearest first.
+     *
+     * Distances are re-measured from [viewCenter] so the Trails list stays coherent — each
+     * circle originally measured them from its own centre, and mixing those would order the
+     * list by an accident of fetch history.
+     */
+    private fun mergeArea(
+        center: GeoPoint,
+        radius: Int,
+        trails: List<Trail>,
+        viewCenter: GeoPoint,
+    ): List<Trail> {
+        loadedAreas.removeAll { it.center == center && it.radius == radius }
+        loadedAreas.addLast(LoadedArea(center, radius, trails))
+        while (loadedAreas.size > MAX_LOADED_AREAS) loadedAreas.removeFirst()
+
+        // Newest wins on an id collision: the same named trail pulled inside a wider circle
+        // carries more of its member ways.
+        val byId = LinkedHashMap<String, Trail>()
+        for (area in loadedAreas) for (t in area.trails) byId[t.id] = t
+        return byId.values
+            .map { it.copy(distanceMeters = nearestVertexDistance(it, viewCenter)) }
+            .sortedBy { it.distanceMeters }
+    }
+
+    /** Distance to the closest vertex, without flattening the paths into a new list. */
+    private fun nearestVertexDistance(trail: Trail, p: GeoPoint): Double {
+        var best = Double.MAX_VALUE
+        for (path in trail.paths) {
+            for (v in path) {
+                val d = Geo.haversineMeters(v, p)
+                if (d < best) best = d
+            }
+        }
+        return if (best == Double.MAX_VALUE) 0.0 else best
     }
 
     private val Throwable.isRateLimit: Boolean get() = message?.contains("429") == true
@@ -772,6 +841,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         /** Attempts per load, so a momentary 502/504 from Overpass isn't a dead end. */
         private const val MAX_ATTEMPTS = 2
         private const val RETRY_DELAY_MS = 2500L
+
+        /** How many recently loaded circles the map keeps drawn at once. */
+        private const val MAX_LOADED_AREAS = 4
 
         /** Ceiling on one load, across every mirror and retry. */
         private const val LOAD_BUDGET_MS = 25_000L
