@@ -89,6 +89,7 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
     LaunchedEffect(Unit) {
         OfflinePacks.ensureLimit(context)
         refresh()
+        vm.refreshOfflineSize()
     }
 
     // While anything is mid-download, re-poll the list every ~2s so progress bars advance.
@@ -235,20 +236,6 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
                     )
                 }
             }
-
-            item {
-                Spacer(Modifier.height(20.dp))
-                OutlinedButton(onClick = onOpenDiagnostics, modifier = Modifier.fillMaxWidth()) {
-                    Text("Diagnostics")
-                }
-                Text(
-                    "What each load did and how long it took — share it if something is slow.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
-                )
-            }
-
             items(areas, key = { it.region.id }) { area ->
                 AreaRow(
                     area = area,
@@ -259,6 +246,50 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
                     onDelete = {
                         OfflinePacks.delete(area) { refresh() }
                     },
+                )
+            }
+
+
+            item {
+                Spacer(Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Offline trail data",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                val mb = ui.offlineTrailBytes / (1024.0 * 1024.0)
+                Text(
+                    if (ui.offlineTrailBytes == 0L) {
+                        "None saved yet. Downloading an area saves its trails here."
+                    } else {
+                        "%.1f MB saved. Kept until you clear it — unlike the map's ".format(mb) +
+                            "temporary cache, this survives so a downloaded area is still there " +
+                            "with no signal."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+                if (ui.offlineTrailBytes > 0L) {
+                    OutlinedButton(
+                        onClick = { vm.clearOfflineTrails() },
+                        modifier = Modifier.padding(top = 8.dp),
+                    ) {
+                        Text("Clear offline trail data")
+                    }
+                }
+
+                Spacer(Modifier.height(20.dp))
+                OutlinedButton(onClick = onOpenDiagnostics, modifier = Modifier.fillMaxWidth()) {
+                    Text("Diagnostics")
+                }
+                Text(
+                    "What each load did and how long it took — share it if something is slow.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
                 )
             }
 

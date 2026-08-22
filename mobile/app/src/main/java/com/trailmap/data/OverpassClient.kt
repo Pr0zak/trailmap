@@ -40,7 +40,17 @@ import kotlin.math.cos
  */
 class TrailsResult(val trails: List<Trail>, val servedCenter: GeoPoint, val servedRadius: Int)
 
-class OverpassClient(private val cacheDir: File? = null, private val prefs: Prefs? = null) {
+/**
+ * @param cacheDir  transient responses, under the OS-evictable cache directory and swept by TTL.
+ * @param durableDir where offline downloads go. A deliberate download has to still be there on a
+ *   trail with no signal, so it must survive both the TTL sweep and Android reclaiming cache
+ *   space — which the cache directory explicitly does not promise.
+ */
+class OverpassClient(
+    private val cacheDir: File? = null,
+    private val durableDir: File? = null,
+    private val prefs: Prefs? = null,
+) {
 
     /** Scope for background cache refreshes, which outlive the load that triggered them. */
     private val refreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -98,7 +108,18 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
      */
     suspend fun prefetch(center: GeoPoint, radiusMeters: Int, mtb: Boolean) {
         DiagLog.log("offline", "prefetch %.4f,%.4f r=%d".format(center.lat, center.lon, radiusMeters))
-        fetchTrails(center, radiusMeters, mtb = mtb, forceRefresh = false)
+        fetchTrails(center, radiusMeters, mtb = mtb, forceRefresh = false, durable = true)
+    }
+
+    /** Bytes held by offline downloads, for the Offline screen to report. */
+    fun durableBytes(): Long {
+        val dir = durableDir?.let { File(it, "overpass") } ?: return 0L
+        return dir.listFiles()?.sumOf { it.length() } ?: 0L
+    }
+
+    /** Delete every offline-downloaded area. */
+    fun clearDurable() {
+        durableDir?.let { File(it, "overpass") }?.listFiles()?.forEach { it.delete() }
     }
 
     /** True if this exact area is already on disk, so a prefetch can skip it. */
@@ -131,6 +152,7 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
         radiusMeters: Int,
         mtb: Boolean = false,
         forceRefresh: Boolean = false,
+        durable: Boolean = false,
     ): TrailsResult =
         withContext(Dispatchers.IO) {
             lastServedStale = false
@@ -140,15 +162,17 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
                 // public server's per-IP rate limit (429). Parks are best-effort.
                 val e = elementsFor(
                     "mtb", center, radiusMeters, forceRefresh, buildMtbQuery(center, radiusMeters),
+                    durable,
                 )
                 coroutineContext.ensureActive()
-                val parks = runCatching { parksFor(center, radiusMeters, forceRefresh) }
+                val parks = runCatching { parksFor(center, radiusMeters, forceRefresh, durable) }
                     .getOrElse { if (it is CancellationException) throw it else emptyList() }
                 coroutineContext.ensureActive()
                 TrailsResult(buildMtbTrails(e.elements, center, parks), e.center, e.radius)
             } else {
                 val e = elementsFor(
                     "all", center, radiusMeters, forceRefresh, buildQuery(center, radiusMeters),
+                    durable,
                 )
                 coroutineContext.ensureActive()
                 TrailsResult(buildTrails(e.elements, center), e.center, e.radius)
@@ -208,6 +232,7 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
         radiusMeters: Int,
         forceRefresh: Boolean,
         query: String,
+        durable: Boolean = false,
     ): Elements {
         // Work out which file would answer this before touching the disk, so a memo hit skips
         // the multi-megabyte read as well as the parse.
@@ -219,7 +244,7 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
                 return Elements(it.elements, source.center, source.radius)
             }
         }
-        val raw = cachedRaw(kind, center, radiusMeters, forceRefresh) { post(query) }
+        val raw = cachedRaw(kind, center, radiusMeters, forceRefresh, durable) { post(query) }
         coroutineContext.ensureActive()
         val parsed = parseResponse(raw.text).elements
         DiagLog.log(
@@ -238,15 +263,22 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
      * park set rather than pulling another multi-megabyte polygon response: park boundaries
      * don't change between two adjacent screens, and this halves MTB's per-pan cost.
      */
-    private suspend fun parksFor(center: GeoPoint, radiusMeters: Int, forceRefresh: Boolean): List<Park> {
+    private suspend fun parksFor(
+        center: GeoPoint,
+        radiusMeters: Int,
+        forceRefresh: Boolean,
+        durable: Boolean,
+    ): List<Park> {
         val reusable = !forceRefresh && lastParksCenter != null &&
             lastParksRadius >= radiusMeters &&
             Geo.haversineMeters(lastParksCenter!!, center) < lastParksRadius * PARK_REUSE_FRACTION
         if (reusable) return lastParks
 
         val parks = parseParks(
-            elementsFor("parks", center, radiusMeters, forceRefresh, buildParkQuery(center, radiusMeters))
-                .elements,
+            elementsFor(
+                "parks", center, radiusMeters, forceRefresh, buildParkQuery(center, radiusMeters),
+                durable,
+            ).elements,
         )
         lastParks = parks
         lastParksCenter = center
@@ -259,6 +291,7 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
     private var lastParksRadius = 0
 
     /** Delete expired cache files once per process. Pan-loading writes far more of them. */
+    /** Sweeps the transient directory only; offline downloads are never pruned. */
     private fun pruneCacheOnce() {
         if (pruned) return
         pruned = true
@@ -273,8 +306,13 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
      * Resolve the cache file for a given (kind, center, radius). Returns null when no
      * [cacheDir] is configured.
      */
-    private fun cacheFile(kind: String, center: GeoPoint, radiusMeters: Int): File? {
-        val dir = cacheDir ?: return null
+    private fun cacheFile(
+        kind: String,
+        center: GeoPoint,
+        radiusMeters: Int,
+        durable: Boolean = false,
+    ): File? {
+        val dir = (if (durable) durableDir else cacheDir) ?: return null
         // Snap the center onto a grid sized at ~1/6 of the query radius. Panning the map
         // refetches around a new center every time, and a 100 m-precision key would mint a
         // fresh cache entry for each of those; a radius-relative grid means revisiting an
@@ -315,9 +353,12 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
      * wins — least to parse, and closest to what was actually asked for.
      */
     private fun coveringCache(kind: String, center: GeoPoint, radiusMeters: Int): CachedCircle? {
-        val dir = cacheDir?.let { File(it, "overpass") } ?: return null
+        val dirs = listOfNotNull(
+            durableDir?.let { File(it, "overpass") },
+            cacheDir?.let { File(it, "overpass") },
+        )
         var best: CachedCircle? = null
-        for (f in dir.listFiles() ?: return null) {
+        for (f in dirs.flatMap { it.listFiles()?.asList() ?: emptyList() }) {
             val c = parseCacheName(kind, f) ?: continue
             if (c.radius < radiusMeters) continue
             // Strict containment is too strict for the common case. A cached circle of the
@@ -348,9 +389,10 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
         center: GeoPoint,
         radiusMeters: Int,
         forceRefresh: Boolean,
+        durable: Boolean,
         fetch: suspend () -> String,
     ): Raw {
-        val file = cacheFile(kind, center, radiusMeters)
+        val file = cacheFile(kind, center, radiusMeters, durable)
         val covering = if (forceRefresh) null else coveringCache(kind, center, radiusMeters)
 
         if (covering != null) {
@@ -944,7 +986,7 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
             .trim('-')
             .ifBlank { "trail" }
 
-    private companion object {
+    companion object {
         /** Bump when the Overpass queries change so old cached responses are ignored. */
         const val CACHE_SCHEMA = "v5"
         /** Disk-cache freshness window: 7 days. */
@@ -961,7 +1003,10 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
         const val MIN_NETWORK_GAP_MS = 3000L
         /** How long to stop asking after a mirror returns 429/504. */
         const val RATE_LIMIT_COOLDOWN_MS = 30_000L
-        /** How far a request may poke outside a cached circle and still be served by it. */
+        /**
+         * How far a request may poke outside a cached circle and still be served by it.
+         * Public because the offline prefetch sizes its tiles from this rule.
+         */
         const val COVER_SLACK = 0.15
 
         /** Reuse the last MTB park set while the map stays within this fraction of its radius. */

@@ -9,6 +9,7 @@ import com.trailmap.data.ElevationProfile
 import com.trailmap.data.Geo
 import com.trailmap.data.GeoPoint
 import com.trailmap.data.Locator
+import com.trailmap.data.OverpassClient
 import com.trailmap.data.Prefs
 import com.trailmap.data.Ride
 import com.trailmap.data.RideTrail
@@ -88,6 +89,8 @@ data class TrailsUiState(
     val servingStale: Boolean = false,
     /** Progress of the trail-data download that accompanies an offline area; null when idle. */
     val trailPrefetch: String? = null,
+    /** Bytes of offline trail data held. Durable, so the user needs to see and manage it. */
+    val offlineTrailBytes: Long = 0L,
 ) {
     val radiusMiles: Double get() = radiusMeters / 1609.344
 
@@ -656,7 +659,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         val radius = prefetchRadius()
         prefetchJob?.cancel()
         prefetchJob = viewModelScope.launch {
-            val coverage = coverCircles(bounds, radius)
+            val coverage = coverCircles(bounds, prefetchStep())
             val circles = coverage.circles
             var failed = 0
             _state.update { it.copy(trailPrefetch = "Trails 0/${circles.size}") }
@@ -672,6 +675,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 _state.update { it.copy(trailPrefetch = "Trails ${i + 1}/${circles.size}") }
             }
+            refreshOfflineSize()
             _state.update {
                 it.copy(
                     trailPrefetch = when {
@@ -691,6 +695,18 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearTrailPrefetch() = _state.update { it.copy(trailPrefetch = null) }
 
+    /** Recount the offline trail store; the Offline screen calls this when it opens. */
+    fun refreshOfflineSize() = viewModelScope.launch {
+        val bytes = withContext(Dispatchers.IO) { overpass.durableBytes() }
+        _state.update { it.copy(offlineTrailBytes = bytes) }
+    }
+
+    /** Delete every downloaded trail area. Tiles are managed separately, by OfflinePacks. */
+    fun clearOfflineTrails() = viewModelScope.launch {
+        withContext(Dispatchers.IO) { overpass.clearDurable() }
+        _state.update { it.copy(offlineTrailBytes = 0L, trailPrefetch = "Offline trail data cleared") }
+    }
+
     /**
      * Circle centres covering [b]. A circle of radius r covers a square of side r·√2, so a
      * grid step a little under that tiles the box with slight overlap and no gaps.
@@ -698,14 +714,40 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     /** Circles covering an offline area, and how many the box would actually have needed. */
     private class Coverage(val circles: List<GeoPoint>, val needed: Int)
 
-    /** The radius an offline prefetch should store, matching what this mode requests. */
-    private fun prefetchRadius(): Int {
+    /**
+     * The largest radius a load in this mode can ask for. Everything about offline sizing is
+     * derived from it, because the cache only serves a request a stored circle contains.
+     */
+    private fun maxRequestRadius(): Int {
         val s = _state.value
         return if (s.mode == MapMode.MTB) s.radiusMeters else MAX_AUTO_RADIUS
     }
 
-    private fun coverCircles(b: ViewBounds, radius: Int): Coverage {
-        val stepMeters = radius * 1.3
+    /**
+     * The radius an offline prefetch stores — deliberately larger than anything that will be
+     * requested. Storing circles the same size as the requests looks efficient and is nearly
+     * useless: containment then only holds within `stored * COVER_SLACK` of the exact centre,
+     * so a downloaded area serves a few hundred metres around each tile and fetches everywhere
+     * else. Oversizing buys the margin that makes the tiles actually reachable.
+     */
+    private fun prefetchRadius(): Int = (maxRequestRadius() * PREFETCH_OVERSIZE).toInt()
+
+    /**
+     * Spacing between prefetch tiles, derived from the rule the cache actually applies:
+     * a request of radius `ask` at distance `d` from a stored circle of radius `store` is
+     * served iff `d + ask <= store * (1 + COVER_SLACK)`. The worst point in a square grid cell
+     * is half a diagonal from the nearest centre, so the step must be at most `maxDrift * √2`.
+     *
+     * The old step of `radius * 1.3` came from the geometry of covering ground with circles,
+     * which is the wrong question — it left 7.4 km of every ALL cell, and 12.4 km of every MTB
+     * cell, closer to no stored centre than the cache would accept.
+     */
+    private fun prefetchStep(): Double {
+        val maxDrift = prefetchRadius() * (1 + OverpassClient.COVER_SLACK) - maxRequestRadius()
+        return maxDrift * kotlin.math.sqrt(2.0)
+    }
+
+    private fun coverCircles(b: ViewBounds, stepMeters: Double): Coverage {
         val latStep = stepMeters / 111_320.0
         val midLat = (b.north + b.south) / 2.0
         val midLon = (b.east + b.west) / 2.0
@@ -929,7 +971,10 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
          * Ceiling on circles per offline area. Each is a few megabytes off a shared public API,
          * so a state-wide box covers what it can and the UI reports how far it got.
          */
-        private const val MAX_PREFETCH_CIRCLES = 12
+        private const val MAX_PREFETCH_CIRCLES = 16
+
+        /** How much wider than the largest request an offline circle is stored. */
+        private const val PREFETCH_OVERSIZE = 1.4
 
         /** Sanity bound while enumerating a box's grid; a US state is a few hundred cells. */
         private const val MAX_CANDIDATE_CIRCLES = 2000

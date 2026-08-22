@@ -29,7 +29,7 @@ class TrailmapApp : Application() {
         @Synchronized
         fun overpass(context: Context): OverpassClient {
             val app = context.applicationContext
-            return client ?: OverpassClient(app.cacheDir, Prefs(app)).also {
+            return client ?: OverpassClient(app.cacheDir, app.filesDir, Prefs(app)).also {
                 client = it
                 DiagLog.log("app", "overpass client created")
             }
