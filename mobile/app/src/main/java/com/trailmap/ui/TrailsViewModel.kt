@@ -215,7 +215,13 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
      */
     private val loadedAreas = mutableListOf<LoadedArea>()
 
-    private class LoadedArea(val center: GeoPoint, val radius: Int, val trails: List<Trail>) {
+    private class LoadedArea(
+        val center: GeoPoint,
+        val radius: Int,
+        /** Which mode fetched this. ALL and MTB are different datasets for the same ground. */
+        val mtb: Boolean,
+        val trails: List<Trail>,
+    ) {
         /** Retained geometry, which is what the memory budget is actually spent on. */
         val vertices: Int = trails.sumOf { t -> t.paths.sumOf { it.size } }
     }
@@ -340,7 +346,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 val sameCircle = result.servedCenter == _state.value.loadedCenter &&
                     result.servedRadius == _state.value.loadedRadiusMeters
                 val merged = withContext(Dispatchers.Default) {
-                    mergeArea(result.servedCenter, result.servedRadius, trails, center)
+                    // `mtb` is load()'s captured value, not a fresh state read — a mode switch
+                    // landing mid-merge must not stamp this area with the wrong dataset.
+                    mergeArea(result.servedCenter, result.servedRadius, mtb, trails, center)
                 }
                 // Identical circle and no new ground means identical geometry, so leave
                 // trailsVersion alone and spare a GeoJSON rebuild for no visible difference.
@@ -399,7 +407,21 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     fun setMode(mode: MapMode) {
         if (_state.value.mode == mode) return
         val radius = if (mode == MapMode.MTB) milesToMeters(25) else DEFAULT_ALL_RADIUS
-        _state.update { it.copy(mode = mode, radiusMeters = radius, selectedTrailId = null) }
+        // Re-scope the drawn set to the new mode straight away rather than waiting for the
+        // load. Filtering only inside mergeArea leaves the old mode's trails on screen for as
+        // long as the fetch takes — and if it fails, permanently: an MTB switch that timed out
+        // sat there showing paved city greenways under a legend headed "Difficulty".
+        // Distances are left as they are; the next successful load refreshes them.
+        val carried = unionFor(mode == MapMode.MTB)
+        _state.update {
+            it.copy(
+                mode = mode,
+                radiusMeters = radius,
+                selectedTrailId = null,
+                trails = carried,
+                trailsVersion = it.trailsVersion + 1,
+            )
+        }
         load(_state.value.center, initialFetchRadius())
     }
 
@@ -475,11 +497,12 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     private fun mergeArea(
         center: GeoPoint,
         radius: Int,
+        mtb: Boolean,
         trails: List<Trail>,
         viewCenter: GeoPoint,
     ): List<Trail> {
-        loadedAreas.removeAll { it.center == center && it.radius == radius }
-        loadedAreas.add(LoadedArea(center, radius, trails))
+        loadedAreas.removeAll { it.center == center && it.radius == radius && it.mtb == mtb }
+        loadedAreas.add(LoadedArea(center, radius, mtb, trails))
 
         // Evict what is furthest from where the user is looking, never what was just loaded.
         // Evicting the *oldest* is what made the map collapse: panning through empty country
@@ -490,18 +513,41 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 loadedAreas.sumOf { it.vertices } > MAX_RETAINED_VERTICES)
         ) {
             val newest = loadedAreas.lastIndex
-            val victim = (0 until newest)
-                .maxByOrNull { Geo.haversineMeters(loadedAreas[it].center, viewCenter) } ?: break
+            // Areas belonging to the other mode go first — they aren't being drawn, they're
+            // just holding budget — then whatever is furthest from the viewport. The other
+            // mode's circles survive on headroom, so switching back doesn't start from one.
+            val victim = (0 until newest).maxWithOrNull(
+                compareBy(
+                    { if (loadedAreas[it].mtb == mtb) 0 else 1 },
+                    { Geo.haversineMeters(loadedAreas[it].center, viewCenter) },
+                ),
+            ) ?: break
             loadedAreas.removeAt(victim)
         }
 
-        // Newest wins on an id collision: the same named trail pulled inside a wider circle
-        // carries more of its member ways.
-        val byId = LinkedHashMap<String, Trail>()
-        for (area in loadedAreas) for (t in area.trails) byId[t.id] = t
-        return byId.values
+        return unionFor(mtb)
             .map { it.copy(distanceMeters = nearestVertexDistance(it, viewCenter)) }
             .sortedBy { it.distanceMeters }
+    }
+
+    /**
+     * The retained trails belonging to one mode, deduped. ALL and MTB are different datasets
+     * over the same ground: without this scoping, switching ALL → MTB left paved greenway
+     * circles in the union, where they survive MTB's 25-mile list filter almost entirely, get
+     * grouped into invented "systems", and render under a legend headed "Difficulty" despite
+     * carrying no mtb:scale at all.
+     *
+     * Newest wins on an id collision: the same named trail pulled inside a wider circle
+     * carries more of its member ways. Distances are left untouched — recomputing them walks
+     * every vertex, which is worth doing on a load but not on a mode toggle.
+     */
+    private fun unionFor(mtb: Boolean): List<Trail> {
+        val byId = LinkedHashMap<String, Trail>()
+        for (area in loadedAreas) {
+            if (area.mtb != mtb) continue
+            for (t in area.trails) byId[t.id] = t
+        }
+        return byId.values.sortedBy { it.distanceMeters }
     }
 
     /** Distance to the closest vertex, without flattening the paths into a new list. */
@@ -605,7 +651,8 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         val mtb = _state.value.mode == MapMode.MTB
         prefetchJob?.cancel()
         prefetchJob = viewModelScope.launch {
-            val circles = coverCircles(bounds)
+            val coverage = coverCircles(bounds)
+            val circles = coverage.circles
             var failed = 0
             _state.update { it.copy(trailPrefetch = "Trails 0/${circles.size}") }
             var lastError: String? = null
@@ -623,6 +670,11 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
             _state.update {
                 it.copy(
                     trailPrefetch = when {
+                        // Never claim the whole area when only its middle was fetched.
+                        failed == 0 && coverage.needed > circles.size ->
+                            "Trails saved for the centre of this area " +
+                                "(${circles.size} of ${coverage.needed} sections) — " +
+                                "download a city region for full coverage"
                         failed == 0 -> "Trails saved for offline use"
                         failed < circles.size -> "Trails partly saved (${circles.size - failed}/${circles.size})"
                         else -> "Couldn't download trails: ${lastError ?: "network error"}"
@@ -638,7 +690,10 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
      * Circle centres covering [b]. A circle of radius r covers a square of side r·√2, so a
      * grid step a little under that tiles the box with slight overlap and no gaps.
      */
-    private fun coverCircles(b: ViewBounds): List<GeoPoint> {
+    /** Circles covering an offline area, and how many the box would actually have needed. */
+    private class Coverage(val circles: List<GeoPoint>, val needed: Int)
+
+    private fun coverCircles(b: ViewBounds): Coverage {
         val stepMeters = MAX_AUTO_RADIUS * 1.3
         val latStep = stepMeters / 111_320.0
         val midLat = (b.north + b.south) / 2.0
@@ -649,11 +704,11 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         // that leaves the area you actually care about out near the circle's edge.
         val rows = maxOf(1, kotlin.math.ceil((b.north - b.south) / latStep).toInt())
         val cols = maxOf(1, kotlin.math.ceil((b.east - b.west) / lonStep).toInt())
-        val out = ArrayList<GeoPoint>()
+        val all = ArrayList<GeoPoint>(minOf(rows * cols, MAX_CANDIDATE_CIRCLES))
         for (row in 0 until rows) {
             for (col in 0 until cols) {
-                if (out.size >= MAX_PREFETCH_CIRCLES) return out
-                out.add(
+                if (all.size >= MAX_CANDIDATE_CIRCLES) break
+                all.add(
                     GeoPoint(
                         midLat + (row - (rows - 1) / 2.0) * latStep,
                         midLon + (col - (cols - 1) / 2.0) * lonStep,
@@ -661,7 +716,18 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
         }
-        return out
+        if (all.size <= MAX_PREFETCH_CIRCLES) return Coverage(all, rows * cols)
+
+        // Over budget: keep the circles nearest the middle of the box. Taking them in row
+        // order instead put every one of "Missouri (overview)"'s twelve circles on a single
+        // strip at latitude 36.058 — whose northern edge is 36.274, still south of Missouri's
+        // 36.499 border. The preset downloaded twelve circles of Arkansas and reported
+        // "Trails saved for offline use".
+        val mid = GeoPoint(midLat, midLon)
+        return Coverage(
+            all.sortedBy { Geo.haversineMeters(it, mid) }.take(MAX_PREFETCH_CIRCLES),
+            rows * cols,
+        )
     }
 
     /** Manual "Search this area" — fetch trails around the current map viewport center. */
@@ -853,6 +919,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
          * so a state-wide box covers what it can and the UI reports how far it got.
          */
         private const val MAX_PREFETCH_CIRCLES = 12
+
+        /** Sanity bound while enumerating a box's grid; a US state is a few hundred cells. */
+        private const val MAX_CANDIDATE_CIRCLES = 2000
 
         /** Attempts per load, so a momentary 502/504 from Overpass isn't a dead end. */
         private const val MAX_ATTEMPTS = 2
