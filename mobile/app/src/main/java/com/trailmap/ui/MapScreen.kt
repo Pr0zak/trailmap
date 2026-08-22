@@ -61,6 +61,7 @@ import kotlinx.coroutines.withContext
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.MapLibreMap
+import org.maplibre.android.maps.MapLibreMapOptions
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.expressions.Expression
@@ -132,23 +133,10 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
         }
     }
 
-    // Place the camera once, when the style first loads. After that the camera belongs to
-    // the user: panning drives which trails are fetched, so following ui.center here would
-    // yank the map back (and re-trigger the fetch it just answered). Explicit recenters go
-    // through ui.focusTarget instead.
-    var cameraPlaced by remember { mutableStateOf(false) }
-    LaunchedEffect(styleRef.value, ui.center) {
-        if (cameraPlaced || styleRef.value == null) return@LaunchedEffect
-        // Switching tabs disposes this composition, so start from where the camera last
-        // settled rather than teleporting back to the device location at the default zoom.
-        val start = vm.lastCamera ?: CameraTarget(ui.center, TrailsViewModel.DEFAULT_ZOOM)
-        mapRef.value?.cameraPosition = CameraPosition.Builder()
-            .target(LatLng(start.point.lat, start.point.lon))
-            .zoom(start.zoom ?: TrailsViewModel.DEFAULT_ZOOM)
-            .build()
-        cameraPlaced = true
-    }
-
+    // The camera belongs to the user from here on: panning drives which trails are fetched,
+    // so following ui.center would yank the map back and re-trigger the fetch it just
+    // answered. Its starting position is set in the AndroidView factory below, and explicit
+    // recentres go through ui.focusTarget.
     // Redraw the trail lines when the data or the filters change. Keyed on ui.filterKey (a
     // short String) rather than ui.filtered, so a camera idle doesn't drag Compose through a
     // structural comparison of every trail's geometry. The GeoJSON is built on a background
@@ -173,7 +161,6 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
         val target = ui.focusTarget ?: return@LaunchedEffect
         val map = mapRef.value ?: return@LaunchedEffect
         if (styleRef.value == null) return@LaunchedEffect // wait for the style, don't drop the move
-        cameraPlaced = true
         map.animateCamera(
             org.maplibre.android.camera.CameraUpdateFactory.newLatLngZoom(
                 LatLng(target.point.lat, target.point.lon),
@@ -187,7 +174,18 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { c ->
-                MapView(c).apply {
+                // Hand the MapView its camera up front. Constructed bare, MapLibre starts at
+                // lat 0, lon 0, zoom 0 and reports a camera-idle from there before any effect
+                // can move it — which used to overwrite the saved camera with the whole world,
+                // so returning from another tab dropped the user onto a blank global map.
+                val start = vm.lastCamera ?: CameraTarget(ui.center, TrailsViewModel.DEFAULT_ZOOM)
+                val options = MapLibreMapOptions.createFromAttributes(c).camera(
+                    CameraPosition.Builder()
+                        .target(LatLng(start.point.lat, start.point.lon))
+                        .zoom(start.zoom ?: TrailsViewModel.DEFAULT_ZOOM)
+                        .build(),
+                )
+                MapView(c, options).apply {
                     onCreate(null)
                     getMapAsync { map ->
                         mapRef.value = map

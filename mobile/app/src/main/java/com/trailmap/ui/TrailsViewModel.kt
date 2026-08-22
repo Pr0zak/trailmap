@@ -255,7 +255,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                     } catch (e: Exception) {
                         failure = e
                         attempt++
-                        if (attempt >= MAX_ATTEMPTS || e.isRateLimit) break
+                        // Retrying something that just spent the full timeout only doubles the
+                        // wait; the same is true of a mirror that told us to back off.
+                        if (attempt >= MAX_ATTEMPTS || e.isRateLimit || e.isTimeout) break
                         delay(RETRY_DELAY_MS)
                     }
                 }
@@ -320,7 +322,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun onCameraIdle(bounds: ViewBounds, center: GeoPoint) {
         val prev = _state.value
-        lastCamera = CameraTarget(center, bounds.zoom)
+        // Ignore anything below world-region zoom: that is MapLibre's uninitialised camera,
+        // not a place the user chose, and recording it would corrupt the restore position.
+        if (bounds.zoom >= MIN_RECORDABLE_ZOOM) lastCamera = CameraTarget(center, bounds.zoom)
         val viewR = viewRadiusMeters(bounds, center)
         val fetchR = fetchRadiusFor(prev, viewR)
         val stale = needsRefetch(prev, viewR, center, fetchR)
@@ -342,6 +346,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private val Throwable.isRateLimit: Boolean get() = message?.contains("429") == true
+
+    private val Throwable.isTimeout: Boolean
+        get() = this is java.io.InterruptedIOException || this is java.net.SocketTimeoutException
 
     /**
      * A failure message that says what actually happened. "Rate-limited" and "the server is
@@ -394,7 +401,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         center: GeoPoint,
         wantRadius: Int,
     ): Boolean {
-        val inFlight = pendingCenter?.takeIf { s.loading }
+        val inFlight = pendingCenter
         val reference = inFlight ?: s.loadedCenter ?: return s.trails.isEmpty()
         val have = if (inFlight != null) pendingRadius else s.loadedRadiusMeters
         // Zoomed out far enough that what we hold can no longer fill the screen.
@@ -543,7 +550,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         private const val SPINNER_DELAY_MS = 250L
 
         /** Refetch once this fraction of the visible rectangle has no data behind it. */
-        private const val EDGE_SLACK = 0.25
+        private const val EDGE_SLACK = 0.4
 
         /** Fetch a little wider than the screen, so a small pan doesn't immediately re-fire. */
         private const val FETCH_MARGIN = 1.35
@@ -551,11 +558,14 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         /** Auto-load only while a fetch could actually fill the screen. */
         private const val COVER_RATIO = 0.9
 
+        /** Below this, the camera is MapLibre's default (0,0 @ z0), not a user position. */
+        private const val MIN_RECORDABLE_ZOOM = 3.0
+
         /** Sanity backstop: never auto-fetch from a continent-scale view. */
         private const val HARD_ZOOM_FLOOR = 8.0
 
         /** Refetch once the map has moved this fraction of the loaded radius. */
-        private const val MIN_DRIFT_FRACTION = 0.25
+        private const val MIN_DRIFT_FRACTION = 0.35
 
         /** Refetch when zooming out needs a radius this many times what we already hold. */
         private const val ZOOM_OUT_FACTOR = 1.5

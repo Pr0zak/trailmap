@@ -34,13 +34,14 @@ import kotlin.math.cos
 class OverpassClient(private val cacheDir: File? = null) {
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        // Overpass queries declare [timeout:120]; allow the read to match (the MTB park
-        // query returns ~3 MB and can take >60 s under public-server load).
-        .readTimeout(130, TimeUnit.SECONDS)
-        // Bound the whole call too, so a body that trickles forever can't hold a mirror slot
-        // past the point where the user has certainly moved on.
-        .callTimeout(150, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        // Deliberately tight for a map that reloads as you pan. A healthy mirror answers a
+        // named-way query in 2-20 s; a mirror that needs longer has effectively failed, and
+        // waiting on it just holds the "Loading trails…" pill up while the user waits for a
+        // screen they have often already panned away from. One mirror in the list has been
+        // observed taking 40 s to return a 500.
+        .readTimeout(45, TimeUnit.SECONDS)
+        .callTimeout(45, TimeUnit.SECONDS)
         .build()
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -67,6 +68,14 @@ class OverpassClient(private val cacheDir: File? = null) {
     /** One-time prune of expired disk-cache entries; nothing else deletes from that dir. */
     @Volatile
     private var pruned = false
+
+    /**
+     * The mirror that answered last. Public Overpass instances go down, get overloaded, and
+     * block individual IPs for a while, so once one has proved it works there is no reason to
+     * keep paying a failed round-trip to a broken one ahead of it in the list.
+     */
+    @Volatile
+    private var preferredEndpoint: String? = null
 
     /**
      * True when this (center, radius) can be served without touching the network — the caller
@@ -396,6 +405,7 @@ class OverpassClient(private val cacheDir: File? = null) {
         val now = System.currentTimeMillis()
         val fresh = synchronized(cooldownUntil) { endpoints.filter { (cooldownUntil[it] ?: 0L) <= now } }
         val order = fresh.ifEmpty { endpoints }
+            .sortedByDescending { it == preferredEndpoint }
 
         val body = FormBody.Builder().add("data", query).build()
         var lastError: Exception? = null
@@ -407,7 +417,7 @@ class OverpassClient(private val cacheDir: File? = null) {
                     .header("User-Agent", "trailmap-android/1.0 (+https://github.com/Pr0zak/trailmap)")
                     .post(body)
                     .build()
-                return client.newCall(req).awaitBody()
+                return client.newCall(req).awaitBody().also { preferredEndpoint = url }
             } catch (e: CancellationException) {
                 throw e // the caller moved on; don't burn the remaining mirrors
             } catch (e: RateLimited) {
@@ -796,8 +806,12 @@ class OverpassClient(private val cacheDir: File? = null) {
         const val MEMO_BUDGET_BYTES = 8L * 1024 * 1024
         /** Backstop on entry count, so many tiny zoomed-in areas can't accumulate forever. */
         const val MEMO_MAX_ENTRIES = 12
-        /** Minimum gap between requests actually put on the wire. */
-        const val MIN_NETWORK_GAP_MS = 1200L
+        /**
+         * Minimum gap between requests actually put on the wire. Overpass instances hand out
+         * temporary per-IP blocks, and a map that refetches as you pan is the exact traffic
+         * shape that earns one — this is the hard floor on how fast that can happen.
+         */
+        const val MIN_NETWORK_GAP_MS = 3000L
         /** How long to stop asking after a mirror returns 429/504. */
         const val RATE_LIMIT_COOLDOWN_MS = 30_000L
         /** Reuse the last MTB park set while the map stays within this fraction of its radius. */
