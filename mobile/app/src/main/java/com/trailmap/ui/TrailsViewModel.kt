@@ -213,9 +213,12 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
      * cached circle you were looking at gets replaced by a fresh 16 km one, which is a dot in
      * the middle of an 89 km screen. Bounded, because each entry retains its geometry.
      */
-    private val loadedAreas = ArrayDeque<LoadedArea>()
+    private val loadedAreas = mutableListOf<LoadedArea>()
 
-    private class LoadedArea(val center: GeoPoint, val radius: Int, val trails: List<Trail>)
+    private class LoadedArea(val center: GeoPoint, val radius: Int, val trails: List<Trail>) {
+        /** Retained geometry, which is what the memory budget is actually spent on. */
+        val vertices: Int = trails.sumOf { t -> t.paths.sumOf { it.size } }
+    }
 
     /**
      * Where the camera last settled. A plain field, not UI state: it is written on every
@@ -476,8 +479,21 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         viewCenter: GeoPoint,
     ): List<Trail> {
         loadedAreas.removeAll { it.center == center && it.radius == radius }
-        loadedAreas.addLast(LoadedArea(center, radius, trails))
-        while (loadedAreas.size > MAX_LOADED_AREAS) loadedAreas.removeFirst()
+        loadedAreas.add(LoadedArea(center, radius, trails))
+
+        // Evict what is furthest from where the user is looking, never what was just loaded.
+        // Evicting the *oldest* is what made the map collapse: panning through empty country
+        // pulled in three circles holding 13, 5 and 57 trails, and each one displaced part of
+        // the dense 302-trail metro circle that was the whole reason anything was on screen.
+        while (loadedAreas.size > 1 &&
+            (loadedAreas.size > MAX_LOADED_AREAS ||
+                loadedAreas.sumOf { it.vertices } > MAX_RETAINED_VERTICES)
+        ) {
+            val newest = loadedAreas.lastIndex
+            val victim = (0 until newest)
+                .maxByOrNull { Geo.haversineMeters(loadedAreas[it].center, viewCenter) } ?: break
+            loadedAreas.removeAt(victim)
+        }
 
         // Newest wins on an id collision: the same named trail pulled inside a wider circle
         // carries more of its member ways.
@@ -819,7 +835,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
          * this a single value — kept as a ladder because the clamp is what enforces the size,
          * and widening the range again should not mean restructuring the calculation.
          */
-        private val RADIUS_LADDER = intArrayOf(16000)
+        private val RADIUS_LADDER = intArrayOf(16000, 24000)
 
         /**
          * Largest circle we'll pull automatically. Sized for reliability rather than coverage:
@@ -827,7 +843,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
          * against 3.1-3.8 MB for 24 km — which is what timed out. A wider view gets less
          * ground covered, but it gets it.
          */
-        private const val MAX_AUTO_RADIUS = 16000
+        private const val MAX_AUTO_RADIUS = 24000
 
         /** Never fetch less than this, whatever the chip says — see [fetchRadiusFor]. */
         private const val MIN_FETCH_RADIUS = 16000
@@ -842,8 +858,20 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         private const val MAX_ATTEMPTS = 2
         private const val RETRY_DELAY_MS = 2500L
 
-        /** How many recently loaded circles the map keeps drawn at once. */
-        private const val MAX_LOADED_AREAS = 4
+        /** How many loaded circles the map keeps drawn at once. */
+        private const val MAX_LOADED_AREAS = 10
+
+        /**
+         * Retained geometry ceiling, in polyline vertices across all held areas.
+         *
+         * A GeoPoint is an object header plus two Doubles, ~32 bytes, and the enclosing lists
+         * add roughly as much again — call it ~70 bytes per retained vertex. 200,000 vertices
+         * is therefore on the order of 14 MB, which is affordable against a phone's heap and
+         * roughly four dense metro circles' worth. It also keeps rendering sane: 400 trails
+         * carrying ~50,000 vertices build and upload their GeoJSON in 45 ms on a Pixel 9a, so
+         * a full budget lands near a fifth of a second, paid only when the set changes.
+         */
+        private const val MAX_RETAINED_VERTICES = 200_000
 
         /** Ceiling on one load, across every mirror and retry. */
         private const val LOAD_BUDGET_MS = 25_000L
