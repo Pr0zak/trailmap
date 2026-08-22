@@ -58,9 +58,11 @@ class OverpassClient(private val cacheDir: File? = null) {
     @Volatile
     private var lastNetworkAt = 0L
 
-    /** After a 429, don't ask again until this time. */
-    @Volatile
-    private var rateLimitedUntil = 0L
+    /**
+     * Per-endpoint cooldown after a genuine 429. Kept per mirror, never global: a single busy
+     * server must not be able to stop the app from asking a healthy one.
+     */
+    private val cooldownUntil = HashMap<String, Long>()
 
     /** One-time prune of expired disk-cache entries; nothing else deletes from that dir. */
     @Volatile
@@ -259,6 +261,14 @@ class OverpassClient(private val cacheDir: File? = null) {
         }
     }
 
+    /**
+     * ALL-mode query. Note the `["name"]` on both clauses: [TrailsUiState.filtered] drops every
+     * trail called "Unnamed path" before anything is drawn or listed, so unnamed ways were
+     * being downloaded, parsed and held in memory only to be discarded. Asking the server to
+     * filter instead takes a Kansas City 8 km pull from 4,034 ways / 3.13 MB down to 277 ways
+     * / 416 KB with no visible difference. If unnamed connectors are ever wanted on the map,
+     * this filter and that one have to come off together.
+     */
     private fun buildQuery(center: GeoPoint, radiusMeters: Int): String {
         val r = radiusMeters
         val lat = center.lat
@@ -266,8 +276,8 @@ class OverpassClient(private val cacheDir: File? = null) {
         return """
             [out:json][timeout:90];
             (
-              way["highway"~"^(path|cycleway|track|bridleway)$"](around:$r,$lat,$lon);
-              way["highway"="footway"]["footway"!~"sidewalk|crossing|traffic_island|access_aisle"](around:$r,$lat,$lon);
+              way["highway"~"^(path|cycleway|track|bridleway)$"]["name"](around:$r,$lat,$lon);
+              way["highway"="footway"]["footway"!~"sidewalk|crossing|traffic_island|access_aisle"]["name"](around:$r,$lat,$lon);
             );
             out geom;
         """.trimIndent()
@@ -280,8 +290,8 @@ class OverpassClient(private val cacheDir: File? = null) {
         return """
             [out:json][timeout:180];
             (
-              way["mtb:scale"](around:$r,$lat,$lon);
-              way["highway"="path"]["bicycle"="designated"]["surface"~"ground|dirt|earth|fine_gravel|gravel|compacted"](around:$r,$lat,$lon);
+              way["mtb:scale"]["name"](around:$r,$lat,$lon);
+              way["highway"="path"]["bicycle"="designated"]["surface"~"ground|dirt|earth|fine_gravel|gravel|compacted"]["name"](around:$r,$lat,$lon);
               relation["route"="mtb"](around:$r,$lat,$lon);
             );
             out geom;
@@ -375,18 +385,21 @@ class OverpassClient(private val cacheDir: File? = null) {
     )
 
     private suspend fun post(query: String): String {
-        // Pan-triggered loading can ask for a lot; these two brakes are what keep a public,
-        // shared, unauthenticated API from seeing a burst it would rightly 429.
-        if (System.currentTimeMillis() < rateLimitedUntil) {
-            throw IOException("Overpass rate-limited — using cached trails")
-        }
+        // Pan-triggered loading can ask for a lot, so keep a floor on how often anything
+        // actually goes on the wire. This throttles; it never refuses.
         val sinceLast = System.currentTimeMillis() - lastNetworkAt
         if (sinceLast in 0 until MIN_NETWORK_GAP_MS) delay(MIN_NETWORK_GAP_MS - sinceLast)
         lastNetworkAt = System.currentTimeMillis()
 
+        // Prefer mirrors that aren't cooling down, but if every one of them is, try them all
+        // anyway — a mirror that 429'd a while ago is still a better bet than no trails.
+        val now = System.currentTimeMillis()
+        val fresh = synchronized(cooldownUntil) { endpoints.filter { (cooldownUntil[it] ?: 0L) <= now } }
+        val order = fresh.ifEmpty { endpoints }
+
         val body = FormBody.Builder().add("data", query).build()
         var lastError: Exception? = null
-        for (url in endpoints) {
+        for (url in order) {
             coroutineContext.ensureActive()
             try {
                 val req = Request.Builder()
@@ -398,8 +411,10 @@ class OverpassClient(private val cacheDir: File? = null) {
             } catch (e: CancellationException) {
                 throw e // the caller moved on; don't burn the remaining mirrors
             } catch (e: RateLimited) {
-                rateLimitedUntil = System.currentTimeMillis() + RATE_LIMIT_COOLDOWN_MS
-                lastError = e // try the next mirror, but stop asking this one for a while
+                synchronized(cooldownUntil) {
+                    cooldownUntil[url] = System.currentTimeMillis() + RATE_LIMIT_COOLDOWN_MS
+                }
+                lastError = e // move on, and stop asking *this* mirror for a while
             } catch (e: Exception) {
                 lastError = e // rate-limited or unreachable → try the next mirror
             }
@@ -422,8 +437,11 @@ class OverpassClient(private val cacheDir: File? = null) {
             override fun onResponse(call: Call, response: Response) {
                 response.use { resp ->
                     if (cont.isCancelled) return
-                    if (resp.code == 429 || resp.code == 504) {
-                        cont.resumeWithException(RateLimited(resp.code))
+                    // Only 429 means "you are asking too often". A 502/504 from Overpass is
+                    // the dispatcher reporting it is momentarily too busy — transient, and
+                    // the right response is the next mirror, not a cooldown.
+                    if (resp.code == 429) {
+                        cont.resumeWithException(RateLimited(429))
                         return
                     }
                     if (!resp.isSuccessful) {
@@ -438,8 +456,8 @@ class OverpassClient(private val cacheDir: File? = null) {
         })
     }
 
-    /** A mirror told us to back off (429), or buckled under load (504). */
-    private class RateLimited(code: Int) : IOException("Overpass busy (HTTP $code)")
+    /** A mirror explicitly told us to back off. */
+    private class RateLimited(code: Int) : IOException("Overpass rate limit (HTTP $code)")
 
     // --- DTOs ---
 
@@ -771,7 +789,7 @@ class OverpassClient(private val cacheDir: File? = null) {
 
     private companion object {
         /** Bump when the Overpass queries change so old cached responses are ignored. */
-        const val CACHE_SCHEMA = "v4"
+        const val CACHE_SCHEMA = "v5"
         /** Disk-cache freshness window: 7 days. */
         val CACHE_TTL_MS = TimeUnit.DAYS.toMillis(7)
         /** Total size of the JSON behind the in-memory parse cache, before LRU eviction. */

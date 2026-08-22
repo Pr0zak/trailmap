@@ -166,8 +166,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     /** Monotonic load counter — a response whose sequence is stale never reaches the UI. */
     private var loadSeq = 0
 
-    /** Center of the load currently running, so a camera idle doesn't duplicate it. */
+    /** Center and radius of the load currently running, so a camera idle doesn't duplicate it. */
     private var pendingCenter: GeoPoint? = null
+    private var pendingRadius = 0
 
     /** Guards the one-time startup locate+load, for this ViewModel's lifetime. */
     private var bootstrapped = false
@@ -228,6 +229,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         loadJob?.cancel()
         val seq = ++loadSeq
         pendingCenter = center
+        pendingRadius = radiusMeters
         loadJob = viewModelScope.launch {
             _state.update { it.copy(error = null, center = center) }
             // Hold the spinner back briefly: an area that's already parsed in memory comes
@@ -237,7 +239,27 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 if (seq == loadSeq) _state.update { it.copy(loading = true) }
             }
             try {
-                val trails = overpass.fetchTrails(center, radiusMeters, mtb = mtb, forceRefresh = force)
+                // Overpass answers a momentary overload with a 502/504 rather than a queue.
+                // One retry turns most of those into a successful load instead of an error
+                // banner the user can only clear by panning somewhere else.
+                var attempt = 0
+                var fetched: List<Trail>? = null
+                var failure: Exception? = null
+                while (attempt < MAX_ATTEMPTS) {
+                    try {
+                        fetched = overpass.fetchTrails(center, radiusMeters, mtb = mtb, forceRefresh = force)
+                        failure = null
+                        break
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        failure = e
+                        attempt++
+                        if (attempt >= MAX_ATTEMPTS || e.isRateLimit) break
+                        delay(RETRY_DELAY_MS)
+                    }
+                }
+                val trails = fetched ?: throw (failure ?: Exception("Failed to load trails"))
                 spinner.cancel()
                 if (seq != loadSeq) return@launch // a newer load already won
                 _state.update { s ->
@@ -259,7 +281,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 spinner.cancel()
                 if (seq != loadSeq) return@launch
                 // Keep the trails already on screen; only surface the error.
-                _state.update { it.copy(loading = false, error = e.message ?: "Failed to load trails") }
+                _state.update { it.copy(loading = false, error = loadErrorText(e, it.trails.isNotEmpty())) }
             } finally {
                 if (seq == loadSeq) pendingCenter = null
             }
@@ -301,11 +323,14 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         lastCamera = CameraTarget(center, bounds.zoom)
         val viewR = viewRadiusMeters(bounds, center)
         val fetchR = fetchRadiusFor(prev, viewR)
-        val stale = needsRefetch(prev, viewR, center)
-        val canCover = fetchR >= viewR * COVER_RATIO && bounds.zoom >= HARD_ZOOM_FLOOR
+        val stale = needsRefetch(prev, viewR, center, fetchR)
+        // Whether a fetch this size can fill the screen. This only drives a caption now —
+        // it must never suppress the load. Refusing to fetch at a wide zoom left the user
+        // staring at a blank metro-wide map, which is strictly worse than partial coverage.
+        val canCover = fetchR >= viewR * COVER_RATIO
         _state.update { it.copy(viewBounds = bounds, viewportStale = stale, canAutoCover = canCover) }
 
-        if (!stale || !prev.autoLoadOnPan || !canCover) return
+        if (!stale || !prev.autoLoadOnPan || bounds.zoom < HARD_ZOOM_FLOOR) return
         panJob?.cancel()
         panJob = viewModelScope.launch {
             // Revisiting an area already parsed in memory should feel immediate, so the
@@ -314,6 +339,20 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
             delay(if (warm) PAN_DEBOUNCE_WARM_MS else PAN_DEBOUNCE_MS)
             load(center, fetchR)
         }
+    }
+
+    private val Throwable.isRateLimit: Boolean get() = message?.contains("429") == true
+
+    /**
+     * A failure message that says what actually happened. "Rate-limited" and "the server is
+     * momentarily busy" are different problems with different answers, and claiming the first
+     * when it was the second sends the user off to wait for nothing.
+     */
+    private fun loadErrorText(e: Exception, haveTrails: Boolean): String = when {
+        e.isRateLimit && haveTrails -> "OpenStreetMap is rate-limiting — showing cached trails"
+        e.isRateLimit -> "OpenStreetMap is rate-limiting — try again shortly"
+        haveTrails -> "Couldn't refresh trails — showing what's cached"
+        else -> "Couldn't reach OpenStreetMap. Check your connection and try again."
     }
 
     /** Half-diagonal of the visible rectangle in metres — how big the screen is on the ground. */
@@ -349,12 +388,23 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
      * While a load is in flight it is judged against the area *that* load will cover, so the
      * camera idles during a fetch don't queue up a duplicate of it.
      */
-    private fun needsRefetch(s: TrailsUiState, viewRadius: Double, center: GeoPoint): Boolean {
+    private fun needsRefetch(
+        s: TrailsUiState,
+        viewRadius: Double,
+        center: GeoPoint,
+        wantRadius: Int,
+    ): Boolean {
         val inFlight = pendingCenter?.takeIf { s.loading }
         val reference = inFlight ?: s.loadedCenter ?: return s.trails.isEmpty()
-        val radius = if (inFlight != null) s.radiusMeters else s.loadedRadiusMeters
-        val uncovered = Geo.haversineMeters(reference, center) + viewRadius - radius
-        return uncovered > viewRadius * EDGE_SLACK
+        val have = if (inFlight != null) pendingRadius else s.loadedRadiusMeters
+        // Zoomed out far enough that what we hold can no longer fill the screen.
+        if (wantRadius > have * ZOOM_OUT_FACTOR) return true
+        val drift = Geo.haversineMeters(reference, center)
+        val uncovered = drift + viewRadius - have
+        // Coverage says the screen has holes; drift says we have actually gone somewhere new.
+        // Both are required: at a wide zoom the screen is permanently "uncovered", and the
+        // coverage test alone would refetch on every single camera idle.
+        return uncovered > viewRadius * EDGE_SLACK && drift > have * MIN_DRIFT_FRACTION
     }
 
     /** Manual "Search this area" — fetch trails around the current map viewport center. */
@@ -502,12 +552,25 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         private const val COVER_RATIO = 0.9
 
         /** Sanity backstop: never auto-fetch from a continent-scale view. */
-        private const val HARD_ZOOM_FLOOR = 9.0
+        private const val HARD_ZOOM_FLOOR = 8.0
+
+        /** Refetch once the map has moved this fraction of the loaded radius. */
+        private const val MIN_DRIFT_FRACTION = 0.25
+
+        /** Refetch when zooming out needs a radius this many times what we already hold. */
+        private const val ZOOM_OUT_FACTOR = 1.5
 
         /** Coarse radius steps, so nearby viewports keep reusing the same cache keys. */
-        private val RADIUS_LADDER = intArrayOf(6000, 8000, 12000, 16000)
+        private val RADIUS_LADDER = intArrayOf(6000, 8000, 12000, 16000, 24000)
 
-        /** Largest circle we'll pull automatically; past this the user asks explicitly. */
-        private const val MAX_AUTO_RADIUS = 16000
+        /**
+         * Largest circle we'll pull. Viable at this size only because the query asks for named
+         * ways: a 24 km unnamed-inclusive pull would be tens of megabytes.
+         */
+        private const val MAX_AUTO_RADIUS = 24000
+
+        /** Attempts per load, so a momentary 502/504 from Overpass isn't a dead end. */
+        private const val MAX_ATTEMPTS = 2
+        private const val RETRY_DELAY_MS = 2500L
     }
 }

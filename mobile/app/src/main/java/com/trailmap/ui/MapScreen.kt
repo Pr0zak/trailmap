@@ -260,8 +260,10 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
         // Status strip, tucked under the two chip rows: a loading pill while a fetch is in
         // flight, otherwise a "Search this area" button when the view has drifted off the
         // loaded trails and auto-load won't cover it (turned off, or zoomed too far out).
-        val offerManualSearch = ui.viewportStale && !ui.loading &&
-            (!ui.autoLoadOnPan || !ui.canAutoCover)
+        // Auto-load now always fires when the view goes stale, so the manual button is for
+        // the case where the user has turned that off — not for wide zooms, which load a
+        // partial area and say so rather than refusing.
+        val offerManualSearch = ui.viewportStale && !ui.loading && !ui.autoLoadOnPan
         Column(
             modifier = Modifier.align(Alignment.TopCenter).padding(top = 108.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -288,19 +290,21 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
                     Spacer(Modifier.size(6.dp))
                     Text("Search this area")
                 }
-                if (!ui.canAutoCover) {
-                    // Say why nothing loaded on its own, rather than leaving it a silent no-op.
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
-                    ) {
-                        Text(
-                            "Zoom in for automatic loading",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                        )
-                    }
+            }
+
+            // At a wide zoom the fetch covers the middle of the screen, not all of it. Say so,
+            // so a sparse map reads as "this is the edge of what was pulled" rather than a bug.
+            if (!ui.canAutoCover && !ui.loading && ui.error == null) {
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+                ) {
+                    Text(
+                        "Trails near the map centre · zoom in for more",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    )
                 }
             }
 
