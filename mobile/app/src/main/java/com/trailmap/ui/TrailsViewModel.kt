@@ -649,16 +649,21 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun prefetchTrailsFor(bounds: ViewBounds) {
         val mtb = _state.value.mode == MapMode.MTB
+        // Store circles at the radius this mode will actually ask for. A cached circle only
+        // answers requests it fully contains, and MTB asks for its chip radius — 40 km at the
+        // default — so tiling at MAX_AUTO_RADIUS (24 km) wrote MTB areas that no MTB load
+        // could ever read. Downloading an area in MTB mode did nothing at all.
+        val radius = prefetchRadius()
         prefetchJob?.cancel()
         prefetchJob = viewModelScope.launch {
-            val coverage = coverCircles(bounds)
+            val coverage = coverCircles(bounds, radius)
             val circles = coverage.circles
             var failed = 0
             _state.update { it.copy(trailPrefetch = "Trails 0/${circles.size}") }
             var lastError: String? = null
             circles.forEachIndexed { i, c ->
-                if (!overpass.hasArea(c, MAX_AUTO_RADIUS, mtb)) {
-                    runCatching { overpass.prefetch(c, MAX_AUTO_RADIUS, mtb) }
+                if (!overpass.hasArea(c, radius, mtb)) {
+                    runCatching { overpass.prefetch(c, radius, mtb) }
                         .onFailure { e ->
                             if (e is CancellationException) throw e
                             failed++
@@ -693,8 +698,14 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     /** Circles covering an offline area, and how many the box would actually have needed. */
     private class Coverage(val circles: List<GeoPoint>, val needed: Int)
 
-    private fun coverCircles(b: ViewBounds): Coverage {
-        val stepMeters = MAX_AUTO_RADIUS * 1.3
+    /** The radius an offline prefetch should store, matching what this mode requests. */
+    private fun prefetchRadius(): Int {
+        val s = _state.value
+        return if (s.mode == MapMode.MTB) s.radiusMeters else MAX_AUTO_RADIUS
+    }
+
+    private fun coverCircles(b: ViewBounds, radius: Int): Coverage {
+        val stepMeters = radius * 1.3
         val latStep = stepMeters / 111_320.0
         val midLat = (b.north + b.south) / 2.0
         val midLon = (b.east + b.west) / 2.0
