@@ -34,8 +34,11 @@ import kotlin.math.cos
  * `<cacheDir>/overpass`. Repeat loads of an area are served from disk (instant,
  * no network) and, if the network fails, a stale cached copy is returned.
  */
-/** Trails for an area, plus the radius the data actually covers. */
-class TrailsResult(val trails: List<Trail>, val servedRadius: Int)
+/**
+ * Trails for an area, plus the circle the data actually covers — which is not always the one
+ * that was asked for, since a cached pull can answer a nearby request.
+ */
+class TrailsResult(val trails: List<Trail>, val servedCenter: GeoPoint, val servedRadius: Int)
 
 class OverpassClient(private val cacheDir: File? = null, private val prefs: Prefs? = null) {
 
@@ -131,13 +134,13 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
                 val parks = runCatching { parksFor(center, radiusMeters, forceRefresh) }
                     .getOrElse { if (it is CancellationException) throw it else emptyList() }
                 coroutineContext.ensureActive()
-                TrailsResult(buildMtbTrails(e.elements, center, parks), e.radius)
+                TrailsResult(buildMtbTrails(e.elements, center, parks), e.center, e.radius)
             } else {
                 val e = elementsFor(
                     "all", center, radiusMeters, forceRefresh, buildQuery(center, radiusMeters),
                 )
                 coroutineContext.ensureActive()
-                TrailsResult(buildTrails(e.elements, center), e.radius)
+                TrailsResult(buildTrails(e.elements, center), e.center, e.radius)
             }
         }
 
@@ -182,7 +185,11 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
      * Parsed elements for one (kind, area), memo → disk → network in that order. A memo hit
      * skips the multi-megabyte file read as well as the parse.
      */
-    private class Elements(val elements: List<OverpassElement>, val radius: Int)
+    private class Elements(
+        val elements: List<OverpassElement>,
+        val center: GeoPoint,
+        val radius: Int,
+    )
 
     private suspend fun elementsFor(
         kind: String,
@@ -198,7 +205,7 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
         if (source != null) {
             synchronized(memo) { memo[source.file.name] }?.let {
                 DiagLog.log("cache", "$kind memory hit, covers ${source.radius} m (asked $radiusMeters)")
-                return Elements(it.elements, source.radius)
+                return Elements(it.elements, source.center, source.radius)
             }
         }
         val raw = cachedRaw(kind, center, radiusMeters, forceRefresh) { post(query) }
@@ -212,7 +219,7 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
         )
         val key = source?.file?.name ?: cacheFile(kind, center, raw.radius)?.name
         if (key != null) memoPut(key, Memoized(parsed, raw.text.length))
-        return Elements(parsed, raw.radius)
+        return Elements(parsed, raw.center, raw.radius)
     }
 
     /**
@@ -302,7 +309,13 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
         for (f in dir.listFiles() ?: return null) {
             val c = parseCacheName(kind, f) ?: continue
             if (c.radius < radiusMeters) continue
-            if (Geo.haversineMeters(c.center, center) + radiusMeters > c.radius) continue
+            // Strict containment is too strict for the common case. A cached circle of the
+            // *same* radius would only ever match a request at exactly its centre, so a warm
+            // restart a few hundred metres away went to the network for data already on disk.
+            // Allow the request to poke out by a fraction of the radius: the caller records
+            // the circle it was actually served, so the coverage gate stays honest and simply
+            // refetches once the map really does leave the area.
+            if (Geo.haversineMeters(c.center, center) + radiusMeters > c.radius * (1 + COVER_SLACK)) continue
             val b = best
             if (b == null || c.radius < b.radius) best = c
         }
@@ -310,7 +323,7 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
     }
 
     /** A raw response plus the radius it actually covers (which may exceed what was asked). */
-    private class Raw(val text: String, val radius: Int)
+    private class Raw(val text: String, val center: GeoPoint, val radius: Int)
 
     /**
      * Cache-first wrapper around a network [fetch]:
@@ -336,13 +349,13 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
             if (System.currentTimeMillis() - covering.file.lastModified() >= CACHE_TTL_MS) {
                 scheduleRefresh(kind, center, radiusMeters, fetch)
             }
-            return Raw(covering.file.readText(), covering.radius)
+            return Raw(covering.file.readText(), covering.center, covering.radius)
         }
 
         return try {
             val raw = fetch()
             if (file != null) runCatching { file.writeText(raw) } // best-effort write-through
-            Raw(raw, radiusMeters)
+            Raw(raw, center, radiusMeters)
         } catch (e: CancellationException) {
             throw e // a newer load superseded this one — don't mask it as a network failure
         } catch (e: Exception) {
@@ -352,7 +365,7 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
             if (stale != null) {
                 DiagLog.log("cache", "$kind fetch failed (${e.message}), serving stale ${stale.radius} m copy")
                 lastServedStale = true // the UI says so rather than passing old data off as new
-                Raw(stale.file.readText(), stale.radius)
+                Raw(stale.file.readText(), stale.center, stale.radius)
             } else {
                 throw e
             }
@@ -937,6 +950,9 @@ class OverpassClient(private val cacheDir: File? = null, private val prefs: Pref
         const val MIN_NETWORK_GAP_MS = 3000L
         /** How long to stop asking after a mirror returns 429/504. */
         const val RATE_LIMIT_COOLDOWN_MS = 30_000L
+        /** How far a request may poke outside a cached circle and still be served by it. */
+        const val COVER_SLACK = 0.15
+
         /** Reuse the last MTB park set while the map stays within this fraction of its radius. */
         const val PARK_REUSE_FRACTION = 0.5
         val BICYCLE_ALLOWED = setOf("yes", "designated", "permissive")

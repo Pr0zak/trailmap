@@ -168,6 +168,16 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     private val _profiles = MutableStateFlow<Map<String, ElevationProfile>>(emptyMap())
     val profiles: StateFlow<Map<String, ElevationProfile>> = _profiles.asStateFlow()
 
+    init {
+        // First line of any shared log: which build and which device produced it.
+        DiagLog.log(
+            "app",
+            "trailmap ${com.trailmap.BuildConfig.VERSION_NAME} on " +
+                "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} " +
+                "(Android ${android.os.Build.VERSION.RELEASE})",
+        )
+    }
+
     /** The in-flight trail fetch, cancelled whenever a newer one starts. */
     private var loadJob: Job? = null
 
@@ -212,8 +222,18 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val here = locator.current()
             _state.update { it.copy(center = here, focusTarget = CameraTarget(here, DEFAULT_ZOOM)) }
-            load(here, _state.value.radiusMeters)
+            load(here, initialFetchRadius())
         }
+    }
+
+    /**
+     * Radius for a load that isn't driven by a camera idle. It has to match what the camera
+     * will ask for a moment later, or the first thing the map does on launch is supersede its
+     * own bootstrap fetch — which is exactly what the diagnostics log caught it doing.
+     */
+    private fun initialFetchRadius(): Int {
+        val s = _state.value
+        return if (s.mode == MapMode.MTB) s.radiusMeters else maxOf(MIN_FETCH_RADIUS, s.radiusMeters)
     }
 
     /**
@@ -228,7 +248,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
             // Move the camera explicitly — panning no longer follows [center], so an explicit
             // recentre has to ask for the move.
             _state.update { it.copy(center = here, focusTarget = CameraTarget(here, DEFAULT_ZOOM)) }
-            load(here, _state.value.radiusMeters, force = true)
+            load(here, initialFetchRadius(), force = true)
         }
     }
 
@@ -291,10 +311,11 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                         loading = false,
                         trails = trails,
                         trailsVersion = s.trailsVersion + 1,
-                        loadedCenter = center,
-                        // The radius the data actually covers, which a wider cached circle can
-                        // exceed. Recording what was *asked* for made the app think it held
-                        // 5 mi when it held 15, and refetch far sooner than it needed to.
+                        // The circle the data actually covers, which is not always the one
+                        // asked for: a cached pull can answer a nearby request. Recording the
+                        // request instead made the app think it held 5 mi when it held 15, and
+                        // refetch far sooner than it needed to.
+                        loadedCenter = result.servedCenter,
                         loadedRadiusMeters = result.servedRadius,
                         viewportStale = false,
                         servingStale = overpass.lastServedStale,
@@ -319,7 +340,10 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     fun setRadius(meters: Int) {
         if (_state.value.radiusMeters == meters) return // re-tapping the active chip is a no-op
         _state.update { it.copy(radiusMeters = meters) }
-        load(_state.value.center, meters)
+        // The chip narrows the Trails list, it no longer decides what gets downloaded. So it
+        // only needs a fetch when it asks to list more than the loaded data actually covers.
+        val s = _state.value
+        if (meters > s.loadedRadiusMeters) load(s.center, maxOf(meters, MIN_FETCH_RADIUS))
     }
 
     /** Radius selector in miles. Must agree exactly with the defaults, or re-selecting the
@@ -331,7 +355,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         if (_state.value.mode == mode) return
         val radius = if (mode == MapMode.MTB) milesToMeters(25) else DEFAULT_ALL_RADIUS
         _state.update { it.copy(mode = mode, radiusMeters = radius, selectedTrailId = null) }
-        load(_state.value.center, radius)
+        load(_state.value.center, initialFetchRadius())
     }
 
     // --- Map viewport → trail loading ---------------------------------------
