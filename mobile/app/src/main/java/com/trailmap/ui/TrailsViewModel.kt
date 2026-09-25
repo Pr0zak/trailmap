@@ -867,15 +867,20 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     /** Show only saved trails (used by the Trails list "saved" toggle). */
     fun setShowSavedOnly(on: Boolean) = _state.update { it.copy(showSavedOnly = on) }
 
-    /** Force the basemap theme (persisted); cycles SYSTEM → LIGHT → DARK. */
-    fun cycleMapTheme() = _state.update {
-        val next = when (it.mapTheme) {
-            MapTheme.SYSTEM -> MapTheme.LIGHT
-            MapTheme.LIGHT -> MapTheme.DARK
-            MapTheme.DARK -> MapTheme.SYSTEM
-        }
-        prefs.setMapTheme(next.name)
-        it.copy(mapTheme = next)
+    /** Pick the app + basemap theme (persisted): follow the system, or force light/dark. */
+    fun setMapTheme(theme: MapTheme) = _state.update {
+        prefs.setMapTheme(theme.name)
+        it.copy(mapTheme = theme)
+    }
+
+    /** Filters sheet "Reset": every surface and use, any length. Mode and radius stay. */
+    fun resetFilters() = _state.update {
+        val defaults = TrailsUiState()
+        it.copy(
+            selectedSurfaces = defaults.selectedSurfaces,
+            selectedUses = defaults.selectedUses,
+            minLengthMiles = defaults.minLengthMiles,
+        )
     }
 
     /** Recenter the map on a point (e.g. a tapped trail-system header). */

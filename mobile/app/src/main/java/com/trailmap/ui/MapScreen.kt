@@ -32,6 +32,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -247,7 +251,7 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
             onSearchThisArea = vm::searchThisArea,
             onOpenTrail = onOpenTrail,
             onClearSelection = { vm.clearSelection() },
-            onCycleMapTheme = { vm.cycleMapTheme() },
+            onSetTheme = vm::setMapTheme,
             onOpenOffline = onOpenOffline,
             onRecenter = vm::recenterOnMe,
         )
@@ -267,42 +271,30 @@ internal fun BoxScope.MapOverlays(
     onSearchThisArea: () -> Unit,
     onOpenTrail: (String) -> Unit,
     onClearSelection: () -> Unit,
-    onCycleMapTheme: () -> Unit,
+    onSetTheme: (MapTheme) -> Unit,
     onOpenOffline: () -> Unit,
     onRecenter: () -> Unit,
 ) {
-        // Top: the filter card with the status strip stacked under it in one column, so the
-        // strip follows the card's real height. It used to sit at a fixed 108 dp, which put
-        // the loading pill on top of the card's second chip row.
+        var showFilters by remember { mutableStateOf(false) }
+        if (showFilters) FilterSheet(ui, filters, onDismiss = { showFilters = false })
+
+        // Top: the search bar with the status strip stacked under it in one column, so the
+        // strip follows the bar's real height. It used to sit at a fixed 108 dp, which put
+        // the loading pill on top of the old chip rows.
         Column(
             modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Surface(
+            TrailSearchBar(
+                ui = ui,
+                filters = filters,
+                onOpenFilters = { showFilters = true },
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.94f),
-                shadowElevation = 3.dp,
-            ) {
-                Column {
-                    FilterChips(
-                        ui = ui,
-                        onToggleSurface = filters.toggleSurface,
-                        onToggleUse = filters.toggleUse,
-                        onSetMode = filters.setMode,
-                        onSetRadiusMiles = filters.setRadiusMiles,
-                        onSetMinLength = filters.setMinLength,
-                        onSetAutoLoad = filters.setAutoLoad,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    )
-                    // Loading is a thin bar along the card's bottom edge: visible, but it
-                    // covers no map and doesn't shift anything when it comes and goes.
-                    if (ui.loading) LinearProgressIndicator(Modifier.fillMaxWidth().height(3.dp))
-                }
-            }
+                showLoading = true,
+            )
 
-            // Under the card: a "Search this area" button when the view has drifted off the
+            // Under the bar: a "Search this area" button when the view has drifted off the
             // loaded trails and auto-load is off, otherwise a quiet count of what's drawn.
             val offerManualSearch = ui.viewportStale && !ui.loading && !ui.autoLoadOnPan
             if (offerManualSearch) {
@@ -363,7 +355,7 @@ internal fun BoxScope.MapOverlays(
                 .padding(start = 8.dp, bottom = if (selectedTrail != null) 160.dp else 40.dp),
         )
 
-        // right-edge controls: theme toggle, offline download, my-location.
+        // right-edge controls: theme menu, offline download, my-location.
         // Lift them above the peek card when one is showing so nothing overlaps.
         Column(
             modifier = Modifier
@@ -372,22 +364,44 @@ internal fun BoxScope.MapOverlays(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            SmallFloatingActionButton(
-                onClick = onCycleMapTheme,
-                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-            ) {
-                Icon(
-                    when (ui.mapTheme) {
-                        MapTheme.SYSTEM -> Icons.Filled.BrightnessAuto
-                        MapTheme.LIGHT -> Icons.Filled.LightMode
-                        MapTheme.DARK -> Icons.Filled.DarkMode
-                    },
-                    contentDescription = "Map theme: ${ui.mapTheme.name.lowercase()}",
-                )
+            // Theme lives behind a Layers button: it's changed rarely, and the old three-state
+            // A / sun / moon icon didn't say what it did.
+            Box {
+                var layersOpen by remember { mutableStateOf(false) }
+                SmallFloatingActionButton(
+                    onClick = { layersOpen = true },
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                ) {
+                    Icon(Icons.Filled.Layers, contentDescription = "Theme")
+                }
+                DropdownMenu(expanded = layersOpen, onDismissRequest = { layersOpen = false }) {
+                    Text(
+                        "Theme",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    )
+                    listOf(
+                        MapTheme.SYSTEM to "Match system",
+                        MapTheme.LIGHT to "Light",
+                        MapTheme.DARK to "Dark",
+                    ).forEach { (theme, label) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            leadingIcon = {
+                                RadioButton(selected = ui.mapTheme == theme, onClick = null)
+                            },
+                            onClick = {
+                                onSetTheme(theme)
+                                layersOpen = false
+                            },
+                        )
+                    }
+                }
             }
             SmallFloatingActionButton(
                 onClick = onOpenOffline,
-                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
             ) {
                 Icon(Icons.Filled.CloudDownload, contentDescription = "Offline areas")
             }

@@ -35,6 +35,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,7 +63,6 @@ fun TrailListScreen(
     TrailListContent(
         ui = ui,
         filters = FilterActions.of(vm),
-        onSetQuery = vm::setQuery,
         onSetShowSavedOnly = vm::setShowSavedOnly,
         onToggleSaved = vm::toggleSaved,
         onOpenTrail = onOpenTrail,
@@ -77,7 +79,6 @@ fun TrailListScreen(
 internal fun TrailListContent(
     ui: TrailsUiState,
     filters: FilterActions,
-    onSetQuery: (String) -> Unit,
     onSetShowSavedOnly: (Boolean) -> Unit,
     onToggleSaved: (String) -> Unit,
     onOpenTrail: (String) -> Unit,
@@ -91,13 +92,13 @@ internal fun TrailListContent(
             TopAppBar(
                 title = {
                     Column {
-                        Text("Nearby Trails", fontWeight = FontWeight.Bold)
+                        Text("Trails", fontWeight = FontWeight.Bold)
                         Text(
                             when {
                                 ui.loading -> "Loading…"
                                 ui.mode == MapMode.MTB ->
                                     "${ui.systems.size} systems · within ${ui.radiusMiles.roundToInt()} mi"
-                                else -> "${trails.size} trails · sorted by distance"
+                                else -> "${trails.size} within ${ui.radiusMiles.roundToInt()} mi · nearest first"
                             },
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -121,36 +122,16 @@ internal fun TrailListContent(
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
-            OutlinedTextField(
-                value = ui.query,
-                onValueChange = onSetQuery,
-                singleLine = true,
-                placeholder = { Text("Search trails by name") },
-                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                trailingIcon = {
-                    if (ui.query.isNotEmpty()) {
-                        IconButton(onClick = { onSetQuery("") }) {
-                            Icon(Icons.Filled.Clear, contentDescription = "Clear search")
-                        }
-                    }
-                },
-                shape = RoundedCornerShape(28.dp),
+            // Same bar and sheet as the map, so the two screens filter the same way.
+            var showFilters by remember { mutableStateOf(false) }
+            if (showFilters) FilterSheet(ui, filters, onDismiss = { showFilters = false })
+            TrailSearchBar(
+                ui = ui,
+                filters = filters,
+                onOpenFilters = { showFilters = true },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 6.dp),
-            )
-
-            FilterChips(
-                ui = ui,
-                onToggleSurface = filters.toggleSurface,
-                onToggleUse = filters.toggleUse,
-                onSetMode = filters.setMode,
-                onSetRadiusMiles = filters.setRadiusMiles,
-                onSetMinLength = filters.setMinLength,
-                onSetAutoLoad = filters.setAutoLoad,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
             )
 
             when {

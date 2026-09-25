@@ -50,13 +50,27 @@ import com.trailmap.ui.RidesScreen
 import com.trailmap.ui.TrailDetailScreen
 import com.trailmap.ui.TrailListScreen
 import com.trailmap.ui.TrailsViewModel
+import com.trailmap.ui.MapTheme
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.trailmap.ui.theme.TrailmapTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         DiagLog.log("app", "activity created (restored=${savedInstanceState != null})")
-        setContent { TrailmapTheme { TrailmapRoot() } }
+        setContent {
+            val vm: TrailsViewModel = viewModel()
+            val ui by vm.state.collectAsStateWithLifecycle()
+            // The theme choice on the map's Layers menu applies to the whole app, so a forced
+            // dark map doesn't sit under light cards and bars.
+            val dark = when (ui.mapTheme) {
+                MapTheme.SYSTEM -> isSystemInDarkTheme()
+                MapTheme.LIGHT -> false
+                MapTheme.DARK -> true
+            }
+            TrailmapTheme(darkTheme = dark) { TrailmapRoot(vm) }
+        }
     }
 }
 
@@ -67,9 +81,8 @@ private sealed class Tab(val route: String, val label: String) {
 }
 
 @Composable
-private fun TrailmapRoot() {
+private fun TrailmapRoot(vm: TrailsViewModel) {
     val nav = rememberNavController()
-    val vm: TrailsViewModel = viewModel()
     val tabs = listOf(Tab.Map, Tab.List, Tab.Rides)
     val backStack by nav.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route

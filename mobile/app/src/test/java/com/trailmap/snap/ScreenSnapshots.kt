@@ -8,6 +8,15 @@ import app.cash.paparazzi.DeviceConfig
 import app.cash.paparazzi.Paparazzi
 import com.trailmap.ui.DiagnosticsContent
 import com.trailmap.ui.FilterActions
+import com.trailmap.ui.FilterSheetContent
+import com.trailmap.data.SurfaceType
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import com.trailmap.ui.MapOverlays
 import com.trailmap.ui.OfflineAreaUi
 import com.trailmap.ui.OfflineContent
@@ -28,13 +37,13 @@ class ScreenSnapshots {
         paparazzi.snapshot { TrailmapTheme(darkTheme = dark) { content() } }
 
     @Composable
-    private fun Map(ui: TrailsUiState, selected: String? = null) = Box(Modifier.fillMaxSize()) {
-        FauxMap(ui.filtered)
+    private fun Map(ui: TrailsUiState, selected: String? = null, dark: Boolean = false) = Box(Modifier.fillMaxSize()) {
+        FauxMap(ui.filtered, dark = dark)
         MapOverlays(
-            ui = ui, dark = false,
+            ui = ui, dark = dark,
             selectedTrail = selected?.let { id -> ui.trails.first { it.id == id } },
             filters = FilterActions(), onSearchThisArea = {}, onOpenTrail = {}, onClearSelection = {},
-            onCycleMapTheme = {}, onOpenOffline = {}, onRecenter = {},
+            onSetTheme = {}, onOpenOffline = {}, onRecenter = {},
         )
     }
 
@@ -42,10 +51,28 @@ class ScreenSnapshots {
     @Test fun map_loading() = shot { Map(Samples.ui.copy(loading = true)) }
     @Test fun map_selected() = shot { Map(Samples.ui, selected = "name_trolley_track_trail") }
     @Test fun map_mtb() = shot { Map(Samples.uiMtb) }
+    @Test fun map_dark() = shot(dark = true) { Map(Samples.ui, dark = true) }
+
+    @Test fun filter_sheet() = shot {
+        Box(Modifier.fillMaxSize()) {
+            FauxMap(Samples.ui.filtered)
+            Box(Modifier.fillMaxSize().background(Color(0x66000000)))
+            Surface(
+                Modifier.align(Alignment.BottomCenter),
+                shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+            ) {
+                FilterSheetContent(
+                    Samples.ui.copy(selectedSurfaces = Samples.ui.selectedSurfaces - SurfaceType.DIRT),
+                    FilterActions(), onDone = {},
+                )
+            }
+        }
+    }
 
     @Composable
     private fun List(ui: TrailsUiState) = TrailListContent(
-        ui = ui, filters = FilterActions(), onSetQuery = {}, onSetShowSavedOnly = {},
+        ui = ui, filters = FilterActions(), onSetShowSavedOnly = {},
         onToggleSaved = {}, onOpenTrail = {}, onOpenSystem = {},
     )
 
