@@ -23,6 +23,8 @@ import com.trailmap.data.clusterTrailSystems
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import androidx.work.WorkInfo
+import com.trailmap.offline.TrailDownloads
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -99,6 +101,8 @@ data class TrailsUiState(
     val trailPrefetchProgress: Pair<Int, Int>? = null,
     /** Which area the trail download is for ("KC Metro", "Current view 1"), for its status card. */
     val trailPrefetchArea: String? = null,
+    /** More areas queued behind the running trail download. */
+    val trailQueued: Int = 0,
     /** Bytes of offline trail data held. Durable, so the user needs to see and manage it. */
     val offlineTrailBytes: Long = 0L,
 ) {
@@ -199,6 +203,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     val profiles: StateFlow<Map<String, ElevationProfile>> = _profiles.asStateFlow()
 
     init {
+        watchTrailDownloads()
         // First line of any shared log: which build and which device produced it.
         DiagLog.log(
             "app",
@@ -215,7 +220,6 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     private var panJob: Job? = null
 
     /** The in-progress offline trail-data download. */
-    private var prefetchJob: Job? = null
 
     /** Monotonic load counter — a response whose sequence is stale never reaches the UI. */
     private var loadSeq = 0
@@ -717,95 +721,63 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         // answers requests it fully contains, and MTB asks for its chip radius — 40 km at the
         // default — so tiling at MAX_AUTO_RADIUS (24 km) wrote MTB areas that no MTB load
         // could ever read. Downloading an area in MTB mode did nothing at all.
-        val radius = prefetchRadius()
-        prefetchJob?.cancel()
-        prefetchJob = viewModelScope.launch {
-            val coverage = coverCircles(bounds, prefetchStep())
-            val circles = coverage.circles
-            var failed = 0
-            _state.update {
-                it.copy(trailPrefetch = "Trails 0/${circles.size}", trailPrefetchProgress = 0 to circles.size, trailPrefetchArea = areaName)
-            }
-            var lastError: String? = null
-            var saved = 0
-            var lostConnection = false
-            for ((i, c) in circles.withIndex()) {
-                if (!overpass.hasArea(c, radius, mtb)) {
-                    // Busy public mirrors answer these multi-megabyte pulls with 504s in bursts,
-                    // and the same section often goes through a few seconds later. Wait and
-                    // retry before giving up on it; move on to the next section after that.
-                    var attempt = 0
-                    while (true) {
-                        val outcome = runCatching { overpass.prefetch(c, radius, mtb) }
-                        val e = outcome.exceptionOrNull()
-                        if (e == null) {
-                            saved++
-                            break
-                        }
-                        if (e is CancellationException) throw e
-                        lastError = e.message
-                        if (e.isNoConnection) {
-                            lostConnection = true
-                            failed++
-                            break
-                        }
-                        if (attempt >= PREFETCH_RETRY_DELAYS_MS.size) {
-                            failed++
-                            DiagLog.log("offline", "section ${i + 1}/${circles.size} skipped after ${attempt + 1} tries: ${e.message}")
-                            break
-                        }
-                        val wait = PREFETCH_RETRY_DELAYS_MS[attempt++]
-                        DiagLog.log("offline", "section ${i + 1}/${circles.size} failed (${e.message}), retrying in ${wait / 1000} s")
-                        _state.update { it.copy(trailPrefetch = "Servers busy, trying section ${i + 1} again in ${wait / 1000} s") }
-                        delay(wait)
-                        _state.update { it.copy(trailPrefetch = "Trails ${i}/${circles.size}") }
-                    }
-                } else {
-                    saved++
-                }
-                // With no connection every remaining section would fail in milliseconds, and
-                // a device log showed it doing exactly that. Stop and say so instead; sections
-                // already saved are skipped when the user resumes.
-                if (lostConnection) {
-                    DiagLog.log("offline", "stopped: no connection after ${i + 1}/${circles.size}")
-                    break
-                }
-                _state.update {
-                    it.copy(trailPrefetch = "Trails ${i + 1}/${circles.size}", trailPrefetchProgress = (i + 1) to circles.size)
-                }
-            }
-            refreshOfflineSize()
-            _state.update {
-                it.copy(
-                    trailPrefetchProgress = null,
-                    trailPrefetch = when {
-                        lostConnection ->
-                            "Paused: the connection dropped after $saved of ${circles.size} sections. " +
-                                "Tap Get trails to carry on; saved sections are kept."
-                        // Never claim the whole area when only its middle was fetched.
-                        failed == 0 && coverage.needed > circles.size ->
-                            "Trails saved for the centre of this area " +
-                                "(${circles.size} of ${coverage.needed} sections) — " +
-                                "download a city region for full coverage"
-                        failed == 0 -> "Trails saved for offline use"
-                        failed < circles.size ->
-                            "$saved of ${circles.size} sections saved. OpenStreetMap was too busy for " +
-                                "the other $failed. Tap Get trails to try those again."
-                        else -> "Couldn't download trails: ${lastError ?: "network error"}"
-                    },
-                )
-            }
-        }
+        val coverage = coverCircles(bounds, prefetchStep())
+        // The download itself runs as a background job (TrailDownloads), so it survives the
+        // user leaving the app and resumes after a dropped connection.
+        TrailDownloads.enqueue(getApplication(), areaName, coverage.circles, prefetchRadius(), mtb, coverage.needed)
     }
 
     fun clearTrailPrefetch() = _state.update { it.copy(trailPrefetch = null, trailPrefetchArea = null) }
 
-    /** Stop a running trail download. Sections already saved stay saved. */
-    fun cancelTrailPrefetch() {
-        prefetchJob?.cancel()
-        refreshOfflineSize()
-        _state.update {
-            it.copy(trailPrefetchProgress = null, trailPrefetch = "Stopped. Sections already saved are kept.")
+    /** Stop the running trail download and anything queued. Sections already saved stay saved. */
+    fun cancelTrailPrefetch() = TrailDownloads.cancelAll(getApplication())
+
+    /**
+     * Mirror the download queue into UI state: the running job's progress, how many areas are
+     * waiting, and — when a job finishes while we're watching — how it ended. Jobs that were
+     * already finished when the app started are history, not news, so they're not announced.
+     */
+    private fun watchTrailDownloads() = viewModelScope.launch {
+        val seenActive = HashSet<java.util.UUID>()
+        TrailDownloads.observe(getApplication()).collect { infos ->
+            val running = infos.firstOrNull { it.state == WorkInfo.State.RUNNING }
+            val waiting = infos.filter { it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.BLOCKED }
+            infos.filter { !it.state.isFinished }.forEach { seenActive += it.id }
+            val justFinished = infos.filter { it.state.isFinished && seenActive.remove(it.id) }
+            _state.update { s ->
+                var next = s
+                if (running != null) {
+                    val p = running.progress
+                    val total = p.getInt(TrailDownloads.KEY_TOTAL, 0)
+                    next = next.copy(
+                        trailPrefetchProgress = p.getInt(TrailDownloads.KEY_DONE, 0) to total,
+                        trailPrefetchArea = p.getString(TrailDownloads.KEY_AREA) ?: next.trailPrefetchArea,
+                        trailPrefetch = p.getString(TrailDownloads.KEY_NOTE),
+                        trailQueued = waiting.size,
+                    )
+                } else if (waiting.isNotEmpty()) {
+                    // Queued but not running: waiting for the network (or a retry back-off).
+                    next = next.copy(
+                        trailPrefetchProgress = 0 to 0,
+                        trailPrefetch = "Waiting for a connection. The download resumes by itself.",
+                        trailQueued = waiting.size - 1,
+                    )
+                } else {
+                    next = next.copy(trailPrefetchProgress = null, trailQueued = 0)
+                }
+                justFinished.lastOrNull()?.let { done ->
+                    val out = done.outputData
+                    next = next.copy(
+                        trailPrefetchArea = out.getString(TrailDownloads.KEY_AREA) ?: next.trailPrefetchArea,
+                        trailPrefetch = when (done.state) {
+                            WorkInfo.State.CANCELLED -> "Stopped. Sections already saved are kept."
+                            else -> out.getString(TrailDownloads.KEY_MESSAGE) ?: "Trail download finished."
+                        }.takeIf { running == null && waiting.isEmpty() } ?: next.trailPrefetch,
+                    )
+                }
+                next
+            }
+            if (justFinished.isNotEmpty()) refreshOfflineSize()
         }
     }
 
@@ -1176,14 +1148,8 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
          */
         private const val MTB_LOAD_BUDGET_MS = 90_000L
 
-        /** Waits before re-trying an offline section that failed on busy mirrors. */
-        private val PREFETCH_RETRY_DELAYS_MS = longArrayOf(12_000L, 25_000L)
 
         /** How long the follow-up park query may take before systems keep their fallback names. */
         private const val PARKS_BUDGET_MS = 60_000L
     }
 }
-
-/** Every Overpass mirror failed its name lookup — the phone is offline, not the servers busy. */
-private val Throwable.isNoConnection: Boolean
-    get() = generateSequence(this) { it.cause }.any { it is com.trailmap.data.OverpassClient.NoConnection }

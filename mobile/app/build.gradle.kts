@@ -15,6 +15,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 1
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // CI passes -Pversion.name=X.Y.Z (from the tag); locally fall back to the repo VERSION file.
         versionName = (project.findProperty("version.name") as String?)
             ?: runCatching { rootProject.file("../VERSION").readText().trim() }.getOrDefault("0.1.0")
@@ -56,6 +57,11 @@ dependencies {
     implementation("org.maplibre.gl:android-sdk:11.5.2")
     // fused location for "trails around me"
     implementation("com.google.android.gms:play-services-location:21.3.0")
+    // offline trail downloads run as a background job, so leaving the app doesn't stop them
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
     // Paparazzi: JVM screenshot tests for UI review (test-only, never in the APK)
     testImplementation("junit:junit:4.13.2")
+    // on-device check that a queued trail download runs to completion
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }

@@ -1,8 +1,12 @@
 package com.trailmap.ui
 
+import androidx.core.content.ContextCompat
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.rememberLauncherForActivityResult
+import android.os.Build
+import android.content.pm.PackageManager
+import android.Manifest
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.ui.platform.LocalView
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.size
@@ -126,6 +130,17 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
         }
     }
 
+    // The download runs in the background with a progress notification; ask to show it
+    // (Android 13+) the first time one starts. It runs either way.
+    val notifyLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    fun askToNotify() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notifyLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     fun downloadView() {
         val vb = ui.viewBounds ?: return
         val n = nextName(areas.map { it.name }, "Current view")
@@ -140,6 +155,7 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
         }
         // Tiles alone give you a basemap with no trails on it; pull the
         // trail data for the same box so the area is actually usable.
+        askToNotify()
         vm.prefetchTrailsFor(vb, n)
         status = "Starting download…"
         refresh()
@@ -155,6 +171,7 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
             status = s
             refresh()
         }
+        askToNotify()
         vm.prefetchTrailsFor(preset.bounds, preset.label)
         status = "Starting ${preset.label} download…"
         refresh()
@@ -187,9 +204,13 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
         onDelete = { id -> areas.firstOrNull { it.region.id == id }?.let { OfflinePacks.delete(it) { refresh() } } },
         onClearTrails = { vm.clearOfflineTrails() },
         onGetTrails = { id ->
+            askToNotify()
             areas.firstOrNull { it.region.id == id }?.let { a -> a.bounds?.let { vm.prefetchTrailsFor(it, a.name) } }
         },
-        onGetPresetTrails = { preset -> vm.prefetchTrailsFor(preset.bounds, preset.label) },
+        onGetPresetTrails = { preset ->
+            askToNotify()
+            vm.prefetchTrailsFor(preset.bounds, preset.label)
+        },
         onCancelTrails = vm::cancelTrailPrefetch,
         onDismissTrailResult = vm::clearTrailPrefetch,
     )
@@ -226,14 +247,6 @@ internal fun OfflineContent(
     onCancelTrails: () -> Unit = {},
     onDismissTrailResult: () -> Unit = {},
 ) {
-    // Keep the screen on while anything downloads here. A screen lock cuts the app off from the
-    // network, and two device logs showed downloads dying mid-area exactly that way.
-    val downloading = ui.trailPrefetchProgress != null || areas.any { !it.complete }
-    val view = LocalView.current
-    DisposableEffect(downloading) {
-        view.keepScreenOn = downloading
-        onDispose { view.keepScreenOn = false }
-    }
 
     Scaffold(
         topBar = {
@@ -273,7 +286,8 @@ internal fun OfflineContent(
                 item(key = "trails_dl") {
                     TrailDownloadCard(
                         ui.trailPrefetchArea ?: "This area", trails, onCancelTrails,
-                        note = ui.trailPrefetch?.takeIf { it.startsWith("Servers busy") },
+                        note = ui.trailPrefetch?.takeIf { it.startsWith("Servers busy") || it.startsWith("Waiting") },
+                        queued = ui.trailQueued,
                     )
                 }
             }
@@ -345,7 +359,6 @@ internal fun OfflineContent(
                                     running -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                                     tilesDone -> TextButton(
                                         onClick = { onGetPresetTrails(preset) },
-                                        enabled = ui.trailPrefetchProgress == null,
                                     ) { Text("Get trails") }
                                     else -> Icon(Icons.Filled.Download, contentDescription = "Download ${preset.label}")
                                 }
@@ -382,7 +395,6 @@ internal fun OfflineContent(
                                 if (t != null && t.first < t.second) {
                                     TextButton(
                                         onClick = { onGetTrails(area.id) },
-                                        enabled = ui.trailPrefetchProgress == null,
                                     ) { Text("Get trails") }
                                 }
                                 IconButton(onClick = { onDelete(area.id) }) {
@@ -450,7 +462,7 @@ private fun DownloadCard(area: OfflineAreaUi, trails: Pair<Int, Int>?, onRetry: 
 
 /** Progress of a trail-data download, with Cancel. */
 @Composable
-private fun TrailDownloadCard(area: String, progress: Pair<Int, Int>, onCancel: () -> Unit, note: String? = null) {
+private fun TrailDownloadCard(area: String, progress: Pair<Int, Int>, onCancel: () -> Unit, note: String? = null, queued: Int = 0) {
     val (done, total) = progress
     Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 14.dp)) {
@@ -465,9 +477,18 @@ private fun TrailDownloadCard(area: String, progress: Pair<Int, Int>, onCancel: 
                 TextButton(onClick = onCancel) { Text("Cancel") }
             }
             Column(Modifier.padding(end = 8.dp)) {
-                ProgressLine("Section $done of $total · keep this screen open", if (total == 0) 1f else done / total.toFloat())
+                if (total > 0) {
+                    ProgressLine("Section $done of $total · carries on if you leave the app", done / total.toFloat())
+                }
                 note?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                }
+                if (queued > 0) {
+                    Text(
+                        if (queued == 1) "1 more area queued" else "$queued more areas queued",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
                 }
             }
         }
