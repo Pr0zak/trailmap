@@ -25,6 +25,9 @@ import com.trailmap.TrailmapApp
 import com.trailmap.data.DiagLog
 import com.trailmap.data.GeoPoint
 import com.trailmap.data.OverpassClient
+import com.trailmap.data.ViewBounds
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -52,14 +55,54 @@ object TrailDownloads {
     const val KEY_DONE = "done"
     const val KEY_TOTAL = "total"
     const val KEY_NOTE = "note"
-    const val KEY_MESSAGE = "message"
+    const val KEY_MESSAGE = "result_message"
 
     /**
-     * Queue a download of [circles] (each [radiusMeters] wide) for [area]. Areas queue up and
-     * run one at a time; the job waits for a network connection before it starts.
-     * [needed] is how many circles the whole box would take, when [circles] is a capped subset.
+     * The finished job's area, in its output. Deliberately not [KEY_AREA]: in a queue WorkManager
+     * merges each finished job's output into the next job's input, and sharing the key made
+     * every queued job take the previous one's name — a log showed the Lawrence job finishing
+     * as "KC Metro: done, 1/1 saved".
      */
-    fun enqueue(context: Context, area: String, circles: List<GeoPoint>, radiusMeters: Int, mtb: Boolean, needed: Int) {
+    const val KEY_RESULT_AREA = "result_area"
+
+    private const val KEY_TAG_PREFIX = "trails:"
+
+    /**
+     * Identifies the ground a download covers, not the name it was started under: a preset
+     * ("KC Metro") and the area downloaded from it ("KC Metro 1") share one box, and a device
+     * log showed both queued — twice over for several regions, 17 jobs in all.
+     */
+    fun keyFor(bounds: ViewBounds, mtb: Boolean): String =
+        KEY_TAG_PREFIX + "%.3f,%.3f,%.3f,%.3f,%s".format(
+            java.util.Locale.US, bounds.north, bounds.south, bounds.east, bounds.west, if (mtb) "mtb" else "all",
+        )
+
+    /** The [keyFor] keys among [infos] that are still queued or running. */
+    fun activeKeys(infos: List<WorkInfo>): Set<String> =
+        infos.filter { !it.state.isFinished }.flatMap { it.tags }.filter { it.startsWith(KEY_TAG_PREFIX) }.toSet()
+
+    /**
+     * Queue a download of [circles] (each [radiusMeters] wide) for [area], unless the same ground
+     * is already queued or downloading — then this is a no-op and returns false. Areas run one at
+     * a time; each job waits for a network connection before it starts. [needed] is how many
+     * circles the whole box would take, when [circles] is a capped subset.
+     */
+    suspend fun enqueue(
+        context: Context,
+        area: String,
+        bounds: ViewBounds,
+        circles: List<GeoPoint>,
+        radiusMeters: Int,
+        mtb: Boolean,
+        needed: Int,
+    ): Boolean {
+        val key = keyFor(bounds, mtb)
+        val wm = WorkManager.getInstance(context)
+        val busy = withContext(Dispatchers.IO) { wm.getWorkInfosByTag(key).get() }.any { !it.state.isFinished }
+        if (busy) {
+            DiagLog.log("offline", "$area is already queued, not adding it again")
+            return false
+        }
         val request = OneTimeWorkRequestBuilder<TrailDownloadWorker>()
             .setInputData(
                 workDataOf(
@@ -74,9 +117,11 @@ object TrailDownloads {
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
             .addTag(UNIQUE)
+            .addTag(key)
             .build()
         DiagLog.log("offline", "queued trails for $area: ${circles.size} sections")
-        WorkManager.getInstance(context).enqueueUniqueWork(UNIQUE, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+        wm.enqueueUniqueWork(UNIQUE, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+        return true
     }
 
     /** Stop the running download and drop the queue. Sections already saved stay saved. */
@@ -165,7 +210,7 @@ class TrailDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
         return Result.success(message(text))
     }
 
-    private fun message(text: String) = workDataOf(TrailDownloads.KEY_MESSAGE to text, TrailDownloads.KEY_AREA to area)
+    private fun message(text: String) = workDataOf(TrailDownloads.KEY_MESSAGE to text, TrailDownloads.KEY_RESULT_AREA to area)
 
     /** Progress for the Offline screen, and the notification that keeps the job running. */
     private suspend fun report(done: Int, total: Int, note: String?) {

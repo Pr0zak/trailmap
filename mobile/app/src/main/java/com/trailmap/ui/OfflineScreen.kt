@@ -1,5 +1,6 @@
 package com.trailmap.ui
 
+import com.trailmap.offline.TrailDownloads
 import androidx.core.content.ContextCompat
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -190,7 +191,12 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
 
     OfflineContent(
         ui = ui,
-        areas = areas.map { OfflineAreaUi(it.region.id, it.name, it.percent, it.complete, it.completedTiles, coverage[it.region.id]) },
+        areas = areas.map {
+            OfflineAreaUi(
+                it.region.id, it.name, it.percent, it.complete, it.completedTiles, coverage[it.region.id],
+                queued = it.bounds?.let { b -> TrailDownloads.keyFor(b, ui.mode == MapMode.MTB) in ui.trailQueuedKeys } == true,
+            )
+        },
         presetTrails = presetCoverage,
         status = status,
         onBack = onBack,
@@ -212,6 +218,27 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
             vm.prefetchTrailsFor(preset.bounds, preset.label)
         },
         onCancelTrails = vm::cancelTrailPrefetch,
+        onGetAllTrails = {
+            askToNotify()
+            // One job per piece of ground: a preset and the area downloaded from it ("KC Metro",
+            // "KC Metro 1") cover the same box, so queue it once, under the preset's name.
+            val mtb = ui.mode == MapMode.MTB
+            val jobs = LinkedHashMap<String, Pair<com.trailmap.data.ViewBounds, String>>()
+            for (preset in PRESETS) {
+                val tilesDone = areas.any { it.complete && it.name.startsWith(preset.label + " ") }
+                val t = presetCoverage[preset.label]
+                if (tilesDone && (t == null || t.first < t.second)) {
+                    jobs.putIfAbsent(TrailDownloads.keyFor(preset.bounds, mtb), preset.bounds to preset.label)
+                }
+            }
+            for (a in areas.filter { it.complete }) {
+                val b = a.bounds ?: continue
+                if (PRESETS.any { a.name.startsWith(it.label + " ") }) continue
+                val t = coverage[a.region.id]
+                if (t == null || t.first < t.second) jobs.putIfAbsent(TrailDownloads.keyFor(b, mtb), b to a.name)
+            }
+            jobs.filterKeys { it !in ui.trailQueuedKeys }.values.forEach { (b, name) -> vm.prefetchTrailsFor(b, name) }
+        },
         onDismissTrailResult = vm::clearTrailPrefetch,
     )
 }
@@ -225,6 +252,8 @@ internal data class OfflineAreaUi(
     val completedTiles: Long,
     /** Trail sections saved / needed for this area in the current mode; null = not known yet. */
     val trails: Pair<Int, Int>? = null,
+    /** Its trail data is queued or downloading. */
+    val queued: Boolean = false,
 )
 
 /** Stateless body of [OfflineScreen], so it can be rendered with sample state. */
@@ -245,6 +274,7 @@ internal fun OfflineContent(
     onGetTrails: (Long) -> Unit = {},
     onGetPresetTrails: (PresetRegion) -> Unit = {},
     onCancelTrails: () -> Unit = {},
+    onGetAllTrails: () -> Unit = {},
     onDismissTrailResult: () -> Unit = {},
 ) {
 
@@ -329,7 +359,25 @@ internal fun OfflineContent(
             }
 
             item {
-                Text("Regions", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Regions",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    // Every downloaded map still missing trail data, queued in one go.
+                    val missing = PRESETS.count { p ->
+                        val tr = presetTrails[p.label]
+                        areas.any { it.complete && it.name.startsWith(p.label + " ") } &&
+                            (tr == null || tr.first < tr.second) &&
+                            TrailDownloads.keyFor(p.bounds, ui.mode == MapMode.MTB) !in ui.trailQueuedKeys
+                    } + areas.count { a ->
+                        a.complete && !a.queued && a.trails != null && a.trails.first < a.trails.second &&
+                            PRESETS.none { a.name.startsWith(it.label + " ") }
+                    }
+                    if (missing > 0) TextButton(onClick = onGetAllTrails) { Text("Get all trails") }
+                }
             }
             item {
                 Column {
@@ -337,6 +385,7 @@ internal fun OfflineContent(
                         // Areas are named "<label> N", so a finished one means this preset is done.
                         val mine = areas.filter { it.name.startsWith(preset.label + " ") }
                         val tilesDone = mine.any { it.complete }
+                        val queued = TrailDownloads.keyFor(preset.bounds, ui.mode == MapMode.MTB) in ui.trailQueuedKeys
                         val running = mine.any { !it.complete }
                         val trails = presetTrails[preset.label]
                         val trailsDone = trails != null && trails.first >= trails.second
@@ -357,6 +406,7 @@ internal fun OfflineContent(
                                 when {
                                     done -> Icon(Icons.Filled.CheckCircle, contentDescription = "Downloaded", tint = MaterialTheme.colorScheme.primary)
                                     running -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                                    queued -> Text("Queued", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     tilesDone -> TextButton(
                                         onClick = { onGetPresetTrails(preset) },
                                     ) { Text("Get trails") }
@@ -392,7 +442,9 @@ internal fun OfflineContent(
                         trailingContent = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 val t = area.trails
-                                if (t != null && t.first < t.second) {
+                                if (area.queued) {
+                                    Text("Queued", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                } else if (t != null && t.first < t.second) {
                                     TextButton(
                                         onClick = { onGetTrails(area.id) },
                                     ) { Text("Get trails") }

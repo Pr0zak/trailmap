@@ -116,7 +116,14 @@ class ScreenSnapshots {
         )
     }
 
-    @Test fun offline_get_trails() = shot { Offline(Samples.ui.copy(trailPrefetchProgress = 3 to 9, trailPrefetchArea = "KC Metro")) }
+    @Test fun offline_get_trails() = shot {
+        Offline(
+            Samples.ui.copy(
+                trailPrefetchProgress = 3 to 9, trailPrefetchArea = "KC Metro", trailQueued = 2,
+                trailQueuedKeys = setOf(com.trailmap.offline.TrailDownloads.keyFor(com.trailmap.data.ViewBounds(39.40, 38.80, -94.30, -94.80, 10.0), false)),
+            ),
+        )
+    }
     @Test fun offline_paused() = shot {
         Offline(
             Samples.ui.copy(
@@ -129,11 +136,14 @@ class ScreenSnapshots {
     @Composable
     private fun Offline(ui: TrailsUiState) = OfflineContent(
         ui = ui.copy(viewBounds = com.trailmap.data.ViewBounds(39.15, 39.05, -94.5, -94.65, 12.0), offlineTrailBytes = 12_900_000L),
-        areas = listOf(OfflineAreaUi(1, "KC Metro 1", 100, true, 18_422, trails = 3 to 9)),
+        areas = listOf(
+            OfflineAreaUi(1, "KC Metro 1", 100, true, 18_422, trails = 3 to 9),
+            OfflineAreaUi(2, "Lawrence, KS 1", 100, true, 70, trails = 0 to 1),
+        ),
         status = null,
         onBack = {}, onOpenDiagnostics = {}, onDownloadView = {}, onDownloadPreset = {},
         onRetry = {}, onDelete = {}, onClearTrails = {},
-        presetTrails = mapOf("KC Metro" to (3 to 9)),
+        presetTrails = mapOf("KC Metro" to (3 to 9), "Lawrence, KS" to (0 to 1)),
     )
 
     @Test fun diagnostics() = shot {

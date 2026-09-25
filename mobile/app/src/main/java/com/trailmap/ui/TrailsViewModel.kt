@@ -103,6 +103,8 @@ data class TrailsUiState(
     val trailPrefetchArea: String? = null,
     /** More areas queued behind the running trail download. */
     val trailQueued: Int = 0,
+    /** [TrailDownloads.keyFor] keys of areas queued or downloading, so their rows say so. */
+    val trailQueuedKeys: Set<String> = emptySet(),
     /** Bytes of offline trail data held. Durable, so the user needs to see and manage it. */
     val offlineTrailBytes: Long = 0L,
 ) {
@@ -724,7 +726,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         val coverage = coverCircles(bounds, prefetchStep())
         // The download itself runs as a background job (TrailDownloads), so it survives the
         // user leaving the app and resumes after a dropped connection.
-        TrailDownloads.enqueue(getApplication(), areaName, coverage.circles, prefetchRadius(), mtb, coverage.needed)
+        viewModelScope.launch {
+            TrailDownloads.enqueue(getApplication(), areaName, bounds, coverage.circles, prefetchRadius(), mtb, coverage.needed)
+        }
     }
 
     fun clearTrailPrefetch() = _state.update { it.copy(trailPrefetch = null, trailPrefetchArea = null) }
@@ -745,7 +749,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
             infos.filter { !it.state.isFinished }.forEach { seenActive += it.id }
             val justFinished = infos.filter { it.state.isFinished && seenActive.remove(it.id) }
             _state.update { s ->
-                var next = s
+                var next = s.copy(trailQueuedKeys = TrailDownloads.activeKeys(infos))
                 if (running != null) {
                     val p = running.progress
                     val total = p.getInt(TrailDownloads.KEY_TOTAL, 0)
@@ -768,7 +772,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 justFinished.lastOrNull()?.let { done ->
                     val out = done.outputData
                     next = next.copy(
-                        trailPrefetchArea = out.getString(TrailDownloads.KEY_AREA) ?: next.trailPrefetchArea,
+                        trailPrefetchArea = out.getString(TrailDownloads.KEY_RESULT_AREA) ?: next.trailPrefetchArea,
                         trailPrefetch = when (done.state) {
                             WorkInfo.State.CANCELLED -> "Stopped. Sections already saved are kept."
                             else -> out.getString(TrailDownloads.KEY_MESSAGE) ?: "Trail download finished."
