@@ -1,6 +1,7 @@
 package com.trailmap.offline
 
 import android.content.Context
+import com.trailmap.data.ViewBounds
 import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.offline.OfflineManager
 import org.maplibre.android.offline.OfflineRegion
@@ -23,7 +24,14 @@ data class OfflineArea(
     val completedTiles: Long,
     val requiredTiles: Long,
     val region: OfflineRegion,
-)
+) {
+    /** The box this area was downloaded for, so its trail data can be checked or fetched. */
+    val bounds: ViewBounds?
+        get() = runCatching {
+            val b = region.definition.bounds ?: return null
+            ViewBounds(b.latitudeNorth, b.latitudeSouth, b.longitudeEast, b.longitudeWest, region.definition.minZoom)
+        }.getOrNull()
+}
 
 /**
  * Offline tile packs for trailmap. Wraps MapLibre's OfflineManager to download named map regions

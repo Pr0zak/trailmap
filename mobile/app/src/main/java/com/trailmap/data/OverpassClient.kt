@@ -4,7 +4,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.selects.onTimeout
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.launch
@@ -50,6 +56,8 @@ class OverpassClient(
     private val cacheDir: File? = null,
     private val durableDir: File? = null,
     private val prefs: Prefs? = null,
+    /** Overpass mirrors, in default order. Overridable so tests can point at local servers. */
+    private val endpoints: List<String> = DEFAULT_ENDPOINTS,
 ) {
 
     /** Scope for background cache refreshes, which outlive the load that triggered them. */
@@ -121,6 +129,13 @@ class OverpassClient(
     fun clearDurable() {
         durableDir?.let { File(it, "overpass") }?.listFiles()?.forEach { it.delete() }
     }
+
+    /**
+     * True if this area is in the offline (durable) store — what "downloaded" should mean.
+     * [hasArea] also counts the transient cache, which Android and the 7-day sweep can empty.
+     */
+    fun hasSavedArea(center: GeoPoint, radiusMeters: Int, mtb: Boolean): Boolean =
+        coveringCache(if (mtb) "mtb" else "all", center, radiusMeters, durableOnly = true) != null
 
     /** True if this exact area is already on disk, so a prefetch can skip it. */
     fun hasArea(center: GeoPoint, radiusMeters: Int, mtb: Boolean): Boolean =
@@ -352,10 +367,15 @@ class OverpassClient(
      * centre, and it was a fresh download of data already on the device. The tightest cover
      * wins — least to parse, and closest to what was actually asked for.
      */
-    private fun coveringCache(kind: String, center: GeoPoint, radiusMeters: Int): CachedCircle? {
+    private fun coveringCache(
+        kind: String,
+        center: GeoPoint,
+        radiusMeters: Int,
+        durableOnly: Boolean = false,
+    ): CachedCircle? {
         val dirs = listOfNotNull(
             durableDir?.let { File(it, "overpass") },
-            cacheDir?.let { File(it, "overpass") },
+            cacheDir?.takeUnless { durableOnly }?.let { File(it, "overpass") },
         )
         var best: CachedCircle? = null
         for (f in dirs.flatMap { it.listFiles()?.asList() ?: emptyList() }) {
@@ -562,13 +582,7 @@ class OverpassClient(
         parks.filter { park -> park.rings.any { pointInRing(point, it) } }
             .minByOrNull { it.bboxArea }?.name
 
-    /** Public Overpass endpoints, tried in order — falls past a rate-limited (429) or down mirror. */
-    private val endpoints = listOf(
-        "https://overpass-api.de/api/interpreter",
-        "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
-        "https://overpass.private.coffee/api/interpreter",
-    )
-
+    @OptIn(ExperimentalCoroutinesApi::class) // select { onTimeout }
     private suspend fun post(query: String): String {
         // Pan-triggered loading can ask for a lot, so keep a floor on how often anything
         // actually goes on the wire. This throttles; it never refuses.
@@ -583,43 +597,96 @@ class OverpassClient(
         val order = fresh.ifEmpty { endpoints }
             .sortedByDescending { it == preferredEndpoint }
 
-        val body = FormBody.Builder().add("data", query).build()
-        var lastError: Exception? = null
-        for (url in order) {
-            coroutineContext.ensureActive()
-            try {
-                val req = Request.Builder()
-                    .url(url)
-                    .header("User-Agent", "trailmap-android/1.0 (+https://github.com/Pr0zak/trailmap)")
-                    .post(body)
-                    .build()
-                val t = System.currentTimeMillis()
-                return client.newCall(req).awaitBody().also {
+        // Hedged, not sequential. Mirrors used to be tried one after another, each allowed
+        // the full 45 s call timeout — but the ViewModel gives a whole load 25 s, so when the
+        // preferred mirror stalled the load died waiting on it and the others were never
+        // asked. A device log showed four loads in a row ending "Timed out reaching
+        // OpenStreetMap" with no mirror ever answering or failing. Now a mirror that hasn't
+        // answered in HEDGE_AFTER_MS gets company: the next one is asked in parallel, the
+        // first good answer wins and the rest are cancelled. A mirror that fails outright
+        // hands over immediately.
+        return coroutineScope {
+            val pending = mutableListOf<Pair<String, Deferred<Result<String>>>>()
+            var next = 0
+            var lastError: Exception? = null
+            fun startNext() {
+                val url = order[next++]
+                pending += url to async { fetchFrom(url, query) }
+            }
+            startNext()
+            while (true) {
+                val finished: Pair<String, Result<String>>? = select {
+                    pending.forEach { (url, d) -> d.onAwait { url to it } }
+                    if (next < order.size) onTimeout(HEDGE_AFTER_MS) { null }
+                }
+                if (finished == null) {
+                    DiagLog.log(
+                        "http",
+                        "no answer from ${pending.joinToString { host(it.first) }} in " +
+                            "${HEDGE_AFTER_MS / 1000} s, also asking ${host(order[next])}",
+                    )
+                    startNext()
+                    continue
+                }
+                val (url, result) = finished
+                pending.removeAll { it.first == url }
+                val body = result.getOrNull()
+                if (body != null) {
+                    pending.forEach { (other, d) ->
+                        d.cancel()
+                        DiagLog.log("http", "${host(other)} dropped, ${host(url)} answered first")
+                    }
                     if (preferredEndpoint != url) {
                         preferredEndpoint = url
                         prefs?.setPreferredEndpoint(url)
                     }
-                    DiagLog.log(
-                        "http",
-                        "${java.net.URI(url).host} OK ${it.length / 1024} KB in " +
-                            "${System.currentTimeMillis() - t} ms",
-                    )
+                    return@coroutineScope body
                 }
-            } catch (e: CancellationException) {
-                throw e // the caller moved on; don't burn the remaining mirrors
-            } catch (e: RateLimited) {
-                synchronized(cooldownUntil) {
-                    cooldownUntil[url] = System.currentTimeMillis() + RATE_LIMIT_COOLDOWN_MS
+                lastError = result.exceptionOrNull() as? Exception
+                if (next < order.size) {
+                    startNext()
+                } else if (pending.isEmpty()) {
+                    throw lastError ?: IOException("all Overpass endpoints failed")
                 }
-                DiagLog.log("http", "${java.net.URI(url).host} rate-limited, cooling down 30 s")
-                lastError = e // move on, and stop asking *this* mirror for a while
-            } catch (e: Exception) {
-                DiagLog.log("http", "${java.net.URI(url).host} failed: ${e.javaClass.simpleName} ${e.message}")
-                lastError = e // unreachable or erroring → try the next mirror
             }
+            @Suppress("UNREACHABLE_CODE")
+            throw IllegalStateException()
         }
-        throw lastError ?: IOException("all Overpass endpoints failed")
     }
+
+    /**
+     * One mirror, one request. Failures come back as a [Result] so the hedging loop in [post]
+     * can move on; cancellation (another mirror won, or the load was superseded) propagates.
+     */
+    private suspend fun fetchFrom(url: String, query: String): Result<String> {
+        val t = System.currentTimeMillis()
+        return try {
+            val req = Request.Builder()
+                .url(url)
+                .header("User-Agent", "trailmap-android/1.0 (+https://github.com/Pr0zak/trailmap)")
+                .post(FormBody.Builder().add("data", query).build())
+                .build()
+            val text = client.newCall(req).awaitBody()
+            DiagLog.log("http", "${host(url)} OK ${text.length / 1024} KB in ${System.currentTimeMillis() - t} ms")
+            Result.success(text)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: RateLimited) {
+            synchronized(cooldownUntil) {
+                cooldownUntil[url] = System.currentTimeMillis() + RATE_LIMIT_COOLDOWN_MS
+            }
+            DiagLog.log("http", "${host(url)} rate-limited, cooling down 30 s")
+            Result.failure(e) // move on, and stop asking *this* mirror for a while
+        } catch (e: Exception) {
+            DiagLog.log(
+                "http",
+                "${host(url)} failed after ${System.currentTimeMillis() - t} ms: ${e.javaClass.simpleName} ${e.message}",
+            )
+            Result.failure(e) // unreachable or erroring → the next mirror
+        }
+    }
+
+    private fun host(url: String): String = runCatching { java.net.URI(url).host }.getOrDefault(url)
 
     /**
      * Await an OkHttp call as a suspend function, cancelling the in-flight HTTP request when
@@ -1001,6 +1068,20 @@ class OverpassClient(
          * shape that earns one — this is the hard floor on how fast that can happen.
          */
         const val MIN_NETWORK_GAP_MS = 3000L
+
+        /** Public Overpass endpoints, tried in order — falls past a rate-limited (429) or down mirror. */
+        val DEFAULT_ENDPOINTS = listOf(
+            "https://overpass-api.de/api/interpreter",
+            "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+            "https://overpass.private.coffee/api/interpreter",
+        )
+
+        /**
+         * How long a mirror gets before the next one is asked in parallel. A healthy mirror
+         * answers a 16 km pull in 3-7 s; three mirrors staggered this far apart all get asked
+         * inside the ViewModel's 25 s load budget.
+         */
+        const val HEDGE_AFTER_MS = 8000L
         /** How long to stop asking after a mirror returns 429/504. */
         const val RATE_LIMIT_COOLDOWN_MS = 30_000L
         /**

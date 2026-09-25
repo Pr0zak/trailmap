@@ -737,6 +737,19 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearTrailPrefetch() = _state.update { it.copy(trailPrefetch = null) }
 
+    /**
+     * How much of [bounds] has trail data in the offline store for the current mode, as
+     * (sections saved, sections needed) — the same sections [prefetchTrailsFor] would fetch.
+     * Map tiles and trail data download separately, so an area can be "downloaded" on the
+     * map and still have no trails; this is what the Offline screen shows for each area.
+     */
+    suspend fun trailCoverage(bounds: ViewBounds): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        val mtb = _state.value.mode == MapMode.MTB
+        val radius = prefetchRadius()
+        val circles = coverCircles(bounds, prefetchStep()).circles
+        circles.count { overpass.hasSavedArea(it, radius, mtb) } to circles.size
+    }
+
     /** Recount the offline trail store; the Offline screen calls this when it opens. */
     fun refreshOfflineSize() = viewModelScope.launch {
         val bytes = withContext(Dispatchers.IO) { overpass.durableBytes() }

@@ -64,6 +64,10 @@ import kotlin.math.floor
 import kotlin.math.max
 
 /** A preset offline region: a labeled bbox with its own zoom depth. */
+/** A preset's box as [ViewBounds], for the trail prefetch and coverage check. */
+internal val PresetRegion.bounds: com.trailmap.data.ViewBounds
+    get() = com.trailmap.data.ViewBounds(north = north, south = south, east = east, west = west, zoom = minZoom)
+
 internal data class PresetRegion(
     val label: String,
     val kind: String,
@@ -148,19 +152,26 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
             status = s
             refresh()
         }
-        vm.prefetchTrailsFor(
-            com.trailmap.data.ViewBounds(
-                north = preset.north, south = preset.south,
-                east = preset.east, west = preset.west, zoom = preset.minZoom,
-            ),
-        )
+        vm.prefetchTrailsFor(preset.bounds)
         status = "Starting ${preset.label} download…"
         refresh()
     }
 
+    // Map tiles and trail data download separately, so check each area's trails on disk. A
+    // tick used to mean tiles only: areas saved before 0.11.0, or whose trail step failed,
+    // showed as downloaded while every load there still went to the network.
+    var coverage by remember { mutableStateOf<Map<Long, Pair<Int, Int>>>(emptyMap()) }
+    var presetCoverage by remember { mutableStateOf<Map<String, Pair<Int, Int>>>(emptyMap()) }
+    val coverageKey = listOf(areas.map { it.region.id to it.complete }, ui.offlineTrailBytes, ui.mode, ui.trailPrefetchProgress == null)
+    LaunchedEffect(coverageKey) {
+        coverage = areas.filter { it.complete }.mapNotNull { a -> a.bounds?.let { a.region.id to vm.trailCoverage(it) } }.toMap()
+        presetCoverage = PRESETS.associate { it.label to vm.trailCoverage(it.bounds) }
+    }
+
     OfflineContent(
         ui = ui,
-        areas = areas.map { OfflineAreaUi(it.region.id, it.name, it.percent, it.complete, it.completedTiles) },
+        areas = areas.map { OfflineAreaUi(it.region.id, it.name, it.percent, it.complete, it.completedTiles, coverage[it.region.id]) },
+        presetTrails = presetCoverage,
         status = status,
         onBack = onBack,
         onOpenDiagnostics = onOpenDiagnostics,
@@ -172,6 +183,8 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
         },
         onDelete = { id -> areas.firstOrNull { it.region.id == id }?.let { OfflinePacks.delete(it) { refresh() } } },
         onClearTrails = { vm.clearOfflineTrails() },
+        onGetTrails = { id -> areas.firstOrNull { it.region.id == id }?.bounds?.let(vm::prefetchTrailsFor) },
+        onGetPresetTrails = { preset -> vm.prefetchTrailsFor(preset.bounds) },
     )
 }
 
@@ -182,6 +195,8 @@ internal data class OfflineAreaUi(
     val percent: Int,
     val complete: Boolean,
     val completedTiles: Long,
+    /** Trail sections saved / needed for this area in the current mode; null = not known yet. */
+    val trails: Pair<Int, Int>? = null,
 )
 
 /** Stateless body of [OfflineScreen], so it can be rendered with sample state. */
@@ -198,6 +213,9 @@ internal fun OfflineContent(
     onRetry: (Long) -> Unit,
     onDelete: (Long) -> Unit,
     onClearTrails: () -> Unit,
+    presetTrails: Map<String, Pair<Int, Int>> = emptyMap(),
+    onGetTrails: (Long) -> Unit = {},
+    onGetPresetTrails: (PresetRegion) -> Unit = {},
 ) {
     Scaffold(
         topBar = {
@@ -269,25 +287,36 @@ internal fun OfflineContent(
                     PRESETS.forEach { preset ->
                         // Areas are named "<label> N", so a finished one means this preset is done.
                         val mine = areas.filter { it.name.startsWith(preset.label + " ") }
-                        val done = mine.any { it.complete }
+                        val tilesDone = mine.any { it.complete }
                         val running = mine.any { !it.complete }
+                        val trails = presetTrails[preset.label]
+                        val trailsDone = trails != null && trails.first >= trails.second
+                        val done = tilesDone && trailsDone
                         ListItem(
                             headlineContent = { Text(preset.label) },
                             supportingContent = {
                                 val tiles = tileCount(preset.north, preset.south, preset.east, preset.west, preset.minZoom.toInt(), preset.maxZoom.toInt())
                                 Text(
-                                    "${preset.kind} · zoom ${preset.minZoom.toInt()}–${preset.maxZoom.toInt()} · ~${formatCount(tiles)} tiles",
+                                    if (tilesDone && trails != null && !trailsDone) {
+                                        "Map saved · trails ${trails.first} of ${trails.second} sections"
+                                    } else {
+                                        "${preset.kind} · zoom ${preset.minZoom.toInt()}–${preset.maxZoom.toInt()} · ~${formatCount(tiles)} tiles"
+                                    },
                                 )
                             },
                             trailingContent = {
                                 when {
                                     done -> Icon(Icons.Filled.CheckCircle, contentDescription = "Downloaded", tint = MaterialTheme.colorScheme.primary)
                                     running -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                                    tilesDone -> TextButton(
+                                        onClick = { onGetPresetTrails(preset) },
+                                        enabled = ui.trailPrefetchProgress == null,
+                                    ) { Text("Get trails") }
                                     else -> Icon(Icons.Filled.Download, contentDescription = "Download ${preset.label}")
                                 }
                             },
                             colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                            modifier = Modifier.clickable(enabled = !done && !running) { onDownloadPreset(preset) },
+                            modifier = Modifier.clickable(enabled = !tilesDone && !running) { onDownloadPreset(preset) },
                         )
                         HorizontalDivider()
                     }
@@ -302,10 +331,28 @@ internal fun OfflineContent(
                 items(ready, key = { it.id }) { area ->
                     ListItem(
                         headlineContent = { Text(area.name) },
-                        supportingContent = { Text("Ready · ${formatCount(area.completedTiles)} tiles") },
+                        supportingContent = {
+                            val t = area.trails
+                            Text(
+                                "Map ${formatCount(area.completedTiles)} tiles · " + when {
+                                    t == null -> "checking trails…"
+                                    t.first >= t.second -> "trails saved"
+                                    else -> "trails ${t.first} of ${t.second} sections"
+                                },
+                            )
+                        },
                         trailingContent = {
-                            IconButton(onClick = { onDelete(area.id) }) {
-                                Icon(Icons.Filled.Delete, contentDescription = "Delete ${area.name}")
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                val t = area.trails
+                                if (t != null && t.first < t.second) {
+                                    TextButton(
+                                        onClick = { onGetTrails(area.id) },
+                                        enabled = ui.trailPrefetchProgress == null,
+                                    ) { Text("Get trails") }
+                                }
+                                IconButton(onClick = { onDelete(area.id) }) {
+                                    Icon(Icons.Filled.Delete, contentDescription = "Delete ${area.name}")
+                                }
                             }
                         },
                         colors = ListItemDefaults.colors(containerColor = Color.Transparent),

@@ -106,12 +106,13 @@ class ScreenSnapshots {
                 trailPrefetchProgress = 6 to 9,
             ),
             areas = listOf(
-                OfflineAreaUi(1, "KC Metro 1", 100, true, 18_422),
+                OfflineAreaUi(1, "KC Metro 1", 100, true, 18_422, trails = 0 to 4),
                 OfflineAreaUi(2, "Current view 1", 46, false, 1_210),
             ),
             status = "Downloading Current view 1… 46%",
             onBack = {}, onOpenDiagnostics = {}, onDownloadView = {}, onDownloadPreset = {},
             onRetry = {}, onDelete = {}, onClearTrails = {},
+            presetTrails = mapOf("KC Metro" to (0 to 4), "Lawrence, KS" to (1 to 1)),
         )
     }
 
