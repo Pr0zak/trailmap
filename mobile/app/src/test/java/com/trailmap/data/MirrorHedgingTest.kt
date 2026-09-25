@@ -17,7 +17,7 @@ class MirrorHedgingTest {
     private val hits = java.util.concurrent.atomic.AtomicInteger()
 
     /** A one-route HTTP/1.1 server that answers every POST with an empty result after [delayMs]. */
-    private fun server(delayMs: Long): String {
+    private fun server(delayMs: Long, status: Int = 200): String {
         val ss = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
         sockets += ss
         thread(isDaemon = true) {
@@ -40,7 +40,7 @@ class MirrorHedgingTest {
                             Thread.sleep(delayMs)
                             val body = """{"elements":[]}"""
                             c.getOutputStream().write(
-                                ("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" +
+                                ("HTTP/1.1 $status X\r\nContent-Type: application/json\r\n" +
                                     "Content-Length: ${body.length}\r\nConnection: close\r\n\r\n$body").toByteArray(),
                             )
                         }
@@ -89,5 +89,23 @@ class MirrorHedgingTest {
         assertTrue("parks should be in", !second.parksPending)
         // Trails come from the in-memory parse cache; only the park query goes out.
         assertTrue("one more request for parks, got ${hits.get()}", hits.get() == 2)
+    }
+
+    @Test fun everyLookupFailingMeansNoConnection() = runBlocking {
+        val client = OverpassClient(
+            endpoints = listOf("http://a.trailmap-test.invalid/api/interpreter", "http://b.trailmap-test.invalid/api/interpreter"),
+        )
+        val e = runCatching { client.fetchTrails(GeoPoint(39.0997, -94.5786), 16000) }.exceptionOrNull()
+        assertTrue("got $e", e is OverpassClient.NoConnection)
+    }
+
+    @Test fun busyMirrorsAreNotNoConnection() = runBlocking {
+        // One mirror answers 504, the other can't be looked up: the phone is online, the
+        // servers are busy. This is the mix that made offline downloads pause wrongly.
+        val client = OverpassClient(
+            endpoints = listOf(server(delayMs = 50, status = 504), "http://c.trailmap-test.invalid/api/interpreter"),
+        )
+        val e = runCatching { client.fetchTrails(GeoPoint(39.0997, -94.5786), 16000) }.exceptionOrNull()
+        assertTrue("got $e", e != null && e !is OverpassClient.NoConnection)
     }
 }

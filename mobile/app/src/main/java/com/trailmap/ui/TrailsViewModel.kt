@@ -731,14 +731,35 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
             var lostConnection = false
             for ((i, c) in circles.withIndex()) {
                 if (!overpass.hasArea(c, radius, mtb)) {
-                    runCatching { overpass.prefetch(c, radius, mtb) }
-                        .onSuccess { saved++ }
-                        .onFailure { e ->
-                            if (e is CancellationException) throw e
-                            failed++
-                            lastError = e.message
-                            lostConnection = e.isNoConnection
+                    // Busy public mirrors answer these multi-megabyte pulls with 504s in bursts,
+                    // and the same section often goes through a few seconds later. Wait and
+                    // retry before giving up on it; move on to the next section after that.
+                    var attempt = 0
+                    while (true) {
+                        val outcome = runCatching { overpass.prefetch(c, radius, mtb) }
+                        val e = outcome.exceptionOrNull()
+                        if (e == null) {
+                            saved++
+                            break
                         }
+                        if (e is CancellationException) throw e
+                        lastError = e.message
+                        if (e.isNoConnection) {
+                            lostConnection = true
+                            failed++
+                            break
+                        }
+                        if (attempt >= PREFETCH_RETRY_DELAYS_MS.size) {
+                            failed++
+                            DiagLog.log("offline", "section ${i + 1}/${circles.size} skipped after ${attempt + 1} tries: ${e.message}")
+                            break
+                        }
+                        val wait = PREFETCH_RETRY_DELAYS_MS[attempt++]
+                        DiagLog.log("offline", "section ${i + 1}/${circles.size} failed (${e.message}), retrying in ${wait / 1000} s")
+                        _state.update { it.copy(trailPrefetch = "Servers busy, trying section ${i + 1} again in ${wait / 1000} s") }
+                        delay(wait)
+                        _state.update { it.copy(trailPrefetch = "Trails ${i}/${circles.size}") }
+                    }
                 } else {
                     saved++
                 }
@@ -767,7 +788,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                                 "(${circles.size} of ${coverage.needed} sections) — " +
                                 "download a city region for full coverage"
                         failed == 0 -> "Trails saved for offline use"
-                        failed < circles.size -> "Trails partly saved (${circles.size - failed}/${circles.size})"
+                        failed < circles.size ->
+                            "$saved of ${circles.size} sections saved. OpenStreetMap was too busy for " +
+                                "the other $failed. Tap Get trails to try those again."
                         else -> "Couldn't download trails: ${lastError ?: "network error"}"
                     },
                 )
@@ -1153,17 +1176,14 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
          */
         private const val MTB_LOAD_BUDGET_MS = 90_000L
 
+        /** Waits before re-trying an offline section that failed on busy mirrors. */
+        private val PREFETCH_RETRY_DELAYS_MS = longArrayOf(12_000L, 25_000L)
+
         /** How long the follow-up park query may take before systems keep their fallback names. */
         private const val PARKS_BUDGET_MS = 60_000L
     }
 }
 
-/**
- * The device has no usable connection — as opposed to a mirror being slow or refusing. A failed
- * DNS lookup, a refused or aborted socket; Android reports its own network cut-off (screen off,
- * background restrictions, a VPN reconnecting) as these.
- */
+/** Every Overpass mirror failed its name lookup — the phone is offline, not the servers busy. */
 private val Throwable.isNoConnection: Boolean
-    get() = generateSequence(this) { it.cause }.any {
-        it is java.net.UnknownHostException || it is java.net.ConnectException || it is java.net.SocketException
-    }
+    get() = generateSequence(this) { it.cause }.any { it is com.trailmap.data.OverpassClient.NoConnection }

@@ -270,7 +270,12 @@ internal fun OfflineContent(
             // no tile card to ride along in, so it gets its own. It used to show nothing at all.
             val trails = ui.trailPrefetchProgress
             if (trails != null && tileDownloads.isEmpty()) {
-                item(key = "trails_dl") { TrailDownloadCard(ui.trailPrefetchArea ?: "This area", trails, onCancelTrails) }
+                item(key = "trails_dl") {
+                    TrailDownloadCard(
+                        ui.trailPrefetchArea ?: "This area", trails, onCancelTrails,
+                        note = ui.trailPrefetch?.takeIf { it.startsWith("Servers busy") },
+                    )
+                }
             }
             // And its outcome stays up until dismissed, rather than a line of small print.
             val result = ui.trailPrefetch
@@ -445,7 +450,7 @@ private fun DownloadCard(area: OfflineAreaUi, trails: Pair<Int, Int>?, onRetry: 
 
 /** Progress of a trail-data download, with Cancel. */
 @Composable
-private fun TrailDownloadCard(area: String, progress: Pair<Int, Int>, onCancel: () -> Unit) {
+private fun TrailDownloadCard(area: String, progress: Pair<Int, Int>, onCancel: () -> Unit, note: String? = null) {
     val (done, total) = progress
     Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 14.dp)) {
@@ -461,6 +466,9 @@ private fun TrailDownloadCard(area: String, progress: Pair<Int, Int>, onCancel: 
             }
             Column(Modifier.padding(end = 8.dp)) {
                 ProgressLine("Section $done of $total · keep this screen open", if (total == 0) 1f else done / total.toFloat())
+                note?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                }
             }
         }
     }
@@ -469,7 +477,7 @@ private fun TrailDownloadCard(area: String, progress: Pair<Int, Int>, onCancel: 
 /** How the last trail download ended, until dismissed. */
 @Composable
 private fun TrailResultCard(area: String?, message: String, onDismiss: () -> Unit) {
-    val trouble = message.startsWith("Paused") || message.startsWith("Couldn't") || message.startsWith("Trails partly")
+    val trouble = message.startsWith("Paused") || message.startsWith("Couldn't") || "too busy" in message
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = if (trouble) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainer,

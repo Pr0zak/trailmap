@@ -636,6 +636,7 @@ class OverpassClient(
             val pending = mutableListOf<Pair<String, Deferred<Result<String>>>>()
             var next = 0
             var lastError: Exception? = null
+            val errors = mutableListOf<Throwable>()
             fun startNext() {
                 val url = order[next++]
                 pending += url to async { fetchFrom(url, query) }
@@ -670,9 +671,17 @@ class OverpassClient(
                     return@coroutineScope body
                 }
                 lastError = result.exceptionOrNull() as? Exception
+                result.exceptionOrNull()?.let { errors += it }
                 if (next < order.size) {
                     startNext()
                 } else if (pending.isEmpty()) {
+                    // Only a failed name lookup on every mirror means the phone itself is offline.
+                    // One mirror dropping a connection or timing out while the others answer
+                    // 504 is the servers being busy — and treating that as "no connection" made
+                    // offline downloads pause on a busy afternoon with the phone online.
+                    if (errors.size == order.size && errors.all { it.isDnsFailure }) {
+                        throw NoConnection(lastError)
+                    }
                     throw lastError ?: IOException("all Overpass endpoints failed")
                 }
             }
@@ -748,6 +757,12 @@ class OverpassClient(
             }
         })
     }
+
+    /** Every mirror failed its name lookup: the device has no usable connection. */
+    class NoConnection(cause: Throwable?) : IOException("No connection", cause)
+
+    private val Throwable.isDnsFailure: Boolean
+        get() = generateSequence(this) { it.cause }.any { it is java.net.UnknownHostException }
 
     /** A mirror explicitly told us to back off. */
     private class RateLimited(code: Int) : IOException("Overpass rate limit (HTTP $code)")
