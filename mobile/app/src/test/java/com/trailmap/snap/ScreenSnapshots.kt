@@ -102,7 +102,8 @@ class ScreenSnapshots {
             ui = Samples.ui.copy(
                 viewBounds = com.trailmap.data.ViewBounds(39.15, 39.05, -94.5, -94.65, 12.0),
                 offlineTrailBytes = 12_900_000L,
-                trailPrefetch = "Trail data: 6 of 9 circles",
+                trailPrefetch = "Trails 6/9",
+                trailPrefetchProgress = 6 to 9,
             ),
             areas = listOf(
                 OfflineAreaUi(1, "KC Metro 1", 100, true, 18_422),
@@ -115,6 +116,6 @@ class ScreenSnapshots {
     }
 
     @Test fun diagnostics() = shot {
-        DiagnosticsContent(Samples.diagLines, onBack = {}, onRefresh = {}, onShare = {}, onClear = {})
+        DiagnosticsContent(Samples.diagLines, onBack = {}, onShare = {}, onClear = {})
     }
 }

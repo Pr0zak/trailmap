@@ -115,14 +115,13 @@ object Samples {
 
     val diagLines = listOf(
         "21:31:07.412  map      drew 142 trails, 612 KB in 88 ms",
-        "21:31:07.301  load     done in 3412 ms · 142 trails · network r=16000",
-        "21:31:07.290  overpass maps.mail.ru 200 · 1.41 MB · 3180 ms",
-        "21:31:04.102  overpass overpass-api.de failed: 504 Gateway Timeout (too busy)",
-        "21:31:03.880  load     start ALL r=16000 @39.0997,-94.5786",
-        "21:31:03.410  camera   idle z12.4 drift 4.1 km > 3.5 km → refetch",
-        "21:30:51.009  cache    disk hit v4_all_39.10_-94.58_16000 (0.3 s)",
-        "21:30:50.700  load     start ALL r=16000 @39.0960,-94.5810",
-        "21:30:49.221  app      trailmap 0.11.1 · Pixel 9a · Android 16",
+        "21:31:07.301  load     done in 3412 ms, 142 trails in a 16000 m circle, 302 shown across 3 areas",
+        "21:31:07.290  http     maps.mail.ru OK 1441 KB in 3180 ms",
+        "21:31:04.102  http     overpass-api.de failed: IOException 504 Gateway Timeout",
+        "21:31:03.880  load     start r=16000 force=false mode=ALL",
+        "21:30:51.009  cache    all memory hit, covers 16000 m (asked 8046)",
+        "21:30:50.700  load     start r=8046 force=false mode=ALL",
+        "21:30:49.221  app      activity created (restored=false)",
     )
 }
 

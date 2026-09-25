@@ -683,7 +683,7 @@ private fun lineWidthExpr(extra: Float = 0f): Expression =
  * difficulty; everything else ("none") falls through to the surface color. One expression
  * serves both ALL mode (all "none" → surface colors) and MTB mode (rated → difficulty).
  */
-private fun trailColorExpr(dark: Boolean): Expression {
+internal fun trailColorExpr(dark: Boolean): Expression {
     val stops = MTB_LINE_COLORS.flatMapIndexed { scale, (light, darkColor) ->
         listOf(Expression.literal("$scale"), Expression.color((if (dark) darkColor else light).toInt()))
     }

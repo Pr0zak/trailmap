@@ -1,5 +1,22 @@
 package com.trailmap.ui
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.ln
+import kotlin.math.tan
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -49,6 +66,7 @@ import kotlin.math.max
 /** A preset offline region: a labeled bbox with its own zoom depth. */
 internal data class PresetRegion(
     val label: String,
+    val kind: String,
     val north: Double,
     val south: Double,
     val east: Double,
@@ -58,13 +76,13 @@ internal data class PresetRegion(
 )
 
 internal val PRESETS = listOf(
-    PresetRegion("KC Metro", 39.40, 38.80, -94.30, -94.80, 10.0, 14.0),
-    PresetRegion("Lawrence, KS", 38.99, 38.90, -95.15, -95.30, 11.0, 14.0),
-    PresetRegion("Columbia, MO", 39.00, 38.88, -92.25, -92.40, 11.0, 14.0),
-    PresetRegion("Springfield, MO", 37.30, 37.08, -93.18, -93.42, 10.0, 14.0),
-    PresetRegion("St. Louis", 38.78, 38.52, -90.15, -90.45, 10.0, 14.0),
-    PresetRegion("Missouri (overview)", 40.65, 35.95, -89.05, -95.80, 6.0, 9.0),
-    PresetRegion("Kansas (overview)", 40.05, 36.95, -94.55, -102.10, 6.0, 9.0),
+    PresetRegion("KC Metro", "Metro", 39.40, 38.80, -94.30, -94.80, 10.0, 14.0),
+    PresetRegion("Lawrence, KS", "City", 38.99, 38.90, -95.15, -95.30, 11.0, 14.0),
+    PresetRegion("Columbia, MO", "City", 39.00, 38.88, -92.25, -92.40, 11.0, 14.0),
+    PresetRegion("Springfield, MO", "City", 37.30, 37.08, -93.18, -93.42, 10.0, 14.0),
+    PresetRegion("St. Louis", "Metro", 38.78, 38.52, -90.15, -90.45, 10.0, 14.0),
+    PresetRegion("Missouri (overview)", "State overview", 40.65, 35.95, -89.05, -95.80, 6.0, 9.0),
+    PresetRegion("Kansas (overview)", "State overview", 40.05, 36.95, -94.55, -102.10, 6.0, 9.0),
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -199,185 +217,180 @@ internal fun OfflineContent(
         },
     ) { padding ->
         LazyColumn(
-            modifier = Modifier
-                .padding(padding)
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(padding).fillMaxWidth(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            // What's stored, up top, instead of paragraphs at the bottom.
+            item { StorageSummary(ui, areas, onClearTrails) }
+
+            // Anything still downloading, with map tiles and trail data side by side.
+            items(areas.filter { !it.complete }, key = { "dl_${it.id}" }) { area ->
+                DownloadCard(area, ui.trailPrefetchProgress, onRetry = { onRetry(area.id) }, onDelete = { onDelete(area.id) })
+            }
+
             item {
-                Spacer(Modifier.height(8.dp))
                 val vb = ui.viewBounds
-                Button(
-                    onClick = onDownloadView,
-                    enabled = vb != null,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
+                Button(onClick = onDownloadView, enabled = vb != null, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Filled.Download, contentDescription = null)
-                    Text("  Download current view")
+                    Spacer(Modifier.width(8.dp))
+                    Text("Download current view")
                 }
-                if (vb == null) {
-                    Text(
-                        "Pan the map first to set a current view.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                status?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
-                }
-                ui.trailPrefetch?.let {
+                Text(
+                    if (vb == null) {
+                        "Pan the map first to set a current view."
+                    } else {
+                        val minZoom = max(10.0, floor(vb.zoom)).toInt()
+                        "About ${formatCount(tileCount(vb.north, vb.south, vb.east, vb.west, minZoom, 15))} " +
+                            "map tiles · zoom $minZoom–15 · plus its trails"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                )
+                val line = status ?: ui.trailPrefetch?.takeIf { ui.trailPrefetchProgress == null }
+                line?.let {
                     Text(
                         it,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 2.dp),
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
                     )
                 }
             }
 
             item {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Downloading an area saves both the basemap and the trails in it, so it "
-                        + "works with no signal.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Download a region",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
+                Text("Regions", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             }
-
-            items(PRESETS) { preset ->
-                OutlinedButton(
-                    onClick = { onDownloadPreset(preset) },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(preset.label, modifier = Modifier.fillMaxWidth())
-                }
-            }
-
             item {
-                Spacer(Modifier.height(16.dp))
-                HorizontalDivider()
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Downloaded areas",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                if (areas.isEmpty()) {
-                    Text(
-                        "No offline areas yet.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 8.dp),
-                    )
-                }
-            }
-            items(areas, key = { it.id }) { area ->
-                AreaRow(
-                    area = area,
-                    onRetry = { onRetry(area.id) },
-                    onDelete = { onDelete(area.id) },
-                )
-            }
-
-
-            item {
-                Spacer(Modifier.height(16.dp))
-                HorizontalDivider()
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Offline trail data",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                val mb = ui.offlineTrailBytes / (1024.0 * 1024.0)
-                Text(
-                    if (ui.offlineTrailBytes == 0L) {
-                        "None saved yet. Downloading an area saves its trails here."
-                    } else {
-                        "%.1f MB saved. Kept until you clear it — unlike the map's ".format(mb) +
-                            "temporary cache, this survives so a downloaded area is still there " +
-                            "with no signal."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-                if (ui.offlineTrailBytes > 0L) {
-                    OutlinedButton(
-                        onClick = onClearTrails,
-                        modifier = Modifier.padding(top = 8.dp),
-                    ) {
-                        Text("Clear offline trail data")
+                Column {
+                    PRESETS.forEach { preset ->
+                        // Areas are named "<label> N", so a finished one means this preset is done.
+                        val mine = areas.filter { it.name.startsWith(preset.label + " ") }
+                        val done = mine.any { it.complete }
+                        val running = mine.any { !it.complete }
+                        ListItem(
+                            headlineContent = { Text(preset.label) },
+                            supportingContent = {
+                                val tiles = tileCount(preset.north, preset.south, preset.east, preset.west, preset.minZoom.toInt(), preset.maxZoom.toInt())
+                                Text(
+                                    "${preset.kind} · zoom ${preset.minZoom.toInt()}–${preset.maxZoom.toInt()} · ~${formatCount(tiles)} tiles",
+                                )
+                            },
+                            trailingContent = {
+                                when {
+                                    done -> Icon(Icons.Filled.CheckCircle, contentDescription = "Downloaded", tint = MaterialTheme.colorScheme.primary)
+                                    running -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                                    else -> Icon(Icons.Filled.Download, contentDescription = "Download ${preset.label}")
+                                }
+                            },
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            modifier = Modifier.clickable(enabled = !done && !running) { onDownloadPreset(preset) },
+                        )
+                        HorizontalDivider()
                     }
                 }
-
-                Spacer(Modifier.height(20.dp))
-                OutlinedButton(onClick = onOpenDiagnostics, modifier = Modifier.fillMaxWidth()) {
-                    Text("Diagnostics")
-                }
-                Text(
-                    "What each load did and how long it took — share it if something is slow.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
-                )
             }
 
-            item { Spacer(Modifier.height(24.dp)) }
+            val ready = areas.filter { it.complete }
+            if (ready.isNotEmpty()) {
+                item {
+                    Text("Downloaded", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                }
+                items(ready, key = { it.id }) { area ->
+                    ListItem(
+                        headlineContent = { Text(area.name) },
+                        supportingContent = { Text("Ready · ${formatCount(area.completedTiles)} tiles") },
+                        trailingContent = {
+                            IconButton(onClick = { onDelete(area.id) }) {
+                                Icon(Icons.Filled.Delete, contentDescription = "Delete ${area.name}")
+                            }
+                        },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Areas, tiles and trail data held, with a way to clear the trail data. */
+@Composable
+private fun StorageSummary(ui: TrailsUiState, areas: List<OfflineAreaUi>, onClearTrails: () -> Unit) {
+    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                SummaryStat("${areas.size}", if (areas.size == 1) "area" else "areas")
+                SummaryStat(formatCount(areas.sumOf { it.completedTiles }), "map tiles")
+                SummaryStat("%.1f MB".format(ui.offlineTrailBytes / (1024.0 * 1024.0)), "trail data")
+            }
+            if (ui.offlineTrailBytes > 0L) TextButton(onClick = onClearTrails) { Text("Clear trails") }
         }
     }
 }
 
 @Composable
-private fun AreaRow(area: OfflineAreaUi, onRetry: () -> Unit, onDelete: () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(area.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-                Spacer(Modifier.height(4.dp))
-                if (area.complete) {
-                    Text(
-                        "Ready · ${area.completedTiles} tiles",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    LinearProgressIndicator(
-                        progress = { area.percent / 100f },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "Downloading… ${area.percent}%",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+private fun SummaryStat(value: String, label: String) = Column {
+    Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+    Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+/**
+ * A download in progress. Retry restarts an area that has stalled; the trail-data bar shows
+ * only while the trail prefetch that accompanies a download is running.
+ */
+@Composable
+private fun DownloadCard(area: OfflineAreaUi, trails: Pair<Int, Int>?, onRetry: () -> Unit, onDelete: () -> Unit) {
+    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    area.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = onRetry) { Icon(Icons.Filled.Refresh, contentDescription = "Retry ${area.name}") }
+                IconButton(onClick = onDelete) { Icon(Icons.Filled.Delete, contentDescription = "Delete ${area.name}") }
             }
-            if (!area.complete) {
-                IconButton(onClick = onRetry) {
-                    Icon(Icons.Filled.Refresh, contentDescription = "Retry ${area.name}")
+            Column(Modifier.padding(end = 12.dp)) {
+                ProgressLine("Map tiles ${area.percent}%", area.percent / 100f)
+                trails?.let { (done, total) ->
+                    ProgressLine("Trail data $done of $total", if (total == 0) 1f else done / total.toFloat())
                 }
-            }
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Filled.Delete, contentDescription = "Delete ${area.name}")
             }
         }
     }
+}
+
+@Composable
+private fun ProgressLine(label: String, fraction: Float) {
+    Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+    LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp))
+}
+
+/**
+ * Web-mercator tiles covering a box over a zoom range — what MapLibre will download for it.
+ * Close enough to warn before a big download; the real count can differ slightly at edges.
+ */
+internal fun tileCount(north: Double, south: Double, east: Double, west: Double, minZoom: Int, maxZoom: Int): Long {
+    fun x(lon: Double, z: Int) = floor((lon + 180.0) / 360.0 * (1 shl z)).toLong()
+    fun y(lat: Double, z: Int): Long {
+        val r = Math.toRadians(lat.coerceIn(-85.0511, 85.0511))
+        return floor((1.0 - ln(tan(r) + 1.0 / cos(r)) / PI) / 2.0 * (1 shl z)).toLong()
+    }
+    return (minZoom..maxZoom).sumOf { z ->
+        (x(east, z) - x(west, z) + 1) * (y(south, z) - y(north, z) + 1)
+    }
+}
+
+/** 1234 → "1,234", 18422 → "18.4k". */
+internal fun formatCount(n: Long): String = when {
+    n >= 10_000 -> "%.1fk".format(n / 1000.0)
+    else -> "%,d".format(n)
 }
 
 /** Next free "<base> N" name given the areas already present (so repeats don't collide). */

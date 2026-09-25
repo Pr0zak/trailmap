@@ -95,6 +95,8 @@ data class TrailsUiState(
     val servingStale: Boolean = false,
     /** Progress of the trail-data download that accompanies an offline area; null when idle. */
     val trailPrefetch: String? = null,
+    /** Sections of trail data fetched / to fetch while an offline download runs; null when idle. */
+    val trailPrefetchProgress: Pair<Int, Int>? = null,
     /** Bytes of offline trail data held. Durable, so the user needs to see and manage it. */
     val offlineTrailBytes: Long = 0L,
 ) {
@@ -690,7 +692,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
             val coverage = coverCircles(bounds, prefetchStep())
             val circles = coverage.circles
             var failed = 0
-            _state.update { it.copy(trailPrefetch = "Trails 0/${circles.size}") }
+            _state.update { it.copy(trailPrefetch = "Trails 0/${circles.size}", trailPrefetchProgress = 0 to circles.size) }
             var lastError: String? = null
             circles.forEachIndexed { i, c ->
                 if (!overpass.hasArea(c, radius, mtb)) {
@@ -701,11 +703,14 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                             lastError = e.message
                         }
                 }
-                _state.update { it.copy(trailPrefetch = "Trails ${i + 1}/${circles.size}") }
+                _state.update {
+                    it.copy(trailPrefetch = "Trails ${i + 1}/${circles.size}", trailPrefetchProgress = (i + 1) to circles.size)
+                }
             }
             refreshOfflineSize()
             _state.update {
                 it.copy(
+                    trailPrefetchProgress = null,
                     trailPrefetch = when {
                         // Never claim the whole area when only its middle was fetched.
                         failed == 0 && coverage.needed > circles.size ->
