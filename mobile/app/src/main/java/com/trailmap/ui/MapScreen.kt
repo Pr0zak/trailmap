@@ -7,6 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -237,6 +238,38 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
             },
         )
 
+        MapOverlays(
+            ui = ui,
+            dark = dark,
+            selectedTrail = ui.selectedTrailId?.let { vm.trailById(it) },
+            filters = FilterActions.of(vm),
+            onSearchThisArea = vm::searchThisArea,
+            onOpenTrail = onOpenTrail,
+            onClearSelection = { vm.clearSelection() },
+            onCycleMapTheme = { vm.cycleMapTheme() },
+            onOpenOffline = onOpenOffline,
+            onRecenter = vm::recenterOnMe,
+        )
+    }
+}
+
+/**
+ * Everything drawn over the map — filter card, status strip, peek card, legend and buttons —
+ * kept free of MapLibre and the ViewModel so it can be rendered with sample state.
+ */
+@Composable
+internal fun BoxScope.MapOverlays(
+    ui: TrailsUiState,
+    dark: Boolean,
+    selectedTrail: Trail?,
+    filters: FilterActions,
+    onSearchThisArea: () -> Unit,
+    onOpenTrail: (String) -> Unit,
+    onClearSelection: () -> Unit,
+    onCycleMapTheme: () -> Unit,
+    onOpenOffline: () -> Unit,
+    onRecenter: () -> Unit,
+) {
         // top overlay: filter chips on a translucent rounded surface
         Surface(
             modifier = Modifier
@@ -248,12 +281,12 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
         ) {
             FilterChips(
                 ui = ui,
-                onToggleSurface = vm::toggleSurface,
-                onToggleUse = vm::toggleUse,
-                onSetMode = vm::setMode,
-                onSetRadiusMiles = vm::setRadiusMiles,
-                onSetMinLength = vm::setMinLength,
-                onSetAutoLoad = vm::setAutoLoadOnPan,
+                onToggleSurface = filters.toggleSurface,
+                onToggleUse = filters.toggleUse,
+                onSetMode = filters.setMode,
+                onSetRadiusMiles = filters.setRadiusMiles,
+                onSetMinLength = filters.setMinLength,
+                onSetAutoLoad = filters.setAutoLoad,
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
             )
         }
@@ -286,7 +319,7 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
                     }
                 }
             } else if (offerManualSearch) {
-                ElevatedButton(onClick = { vm.searchThisArea() }) {
+                ElevatedButton(onClick = { onSearchThisArea() }) {
                     Icon(Icons.Filled.Search, contentDescription = null, Modifier.size(16.dp))
                     Spacer(Modifier.size(6.dp))
                     Text("Search this area")
@@ -327,12 +360,11 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
         }
 
         // bottom peek card — only for the trail the user tapped (nothing auto-selected at startup)
-        val selectedTrail = ui.selectedTrailId?.let { vm.trailById(it) }
         if (selectedTrail != null) {
             NearestTrailCard(
                 trail = selectedTrail,
                 onDetails = { onOpenTrail(selectedTrail.id) },
-                onClose = { vm.clearSelection() },
+                onClose = onClearSelection,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
@@ -351,7 +383,6 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
 
         // right-edge controls: theme toggle, offline download, my-location.
         // Lift them above the peek card when one is showing so nothing overlaps.
-        val context = androidx.compose.ui.platform.LocalContext.current
         Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
@@ -360,7 +391,7 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             SmallFloatingActionButton(
-                onClick = { vm.cycleMapTheme() },
+                onClick = onCycleMapTheme,
                 containerColor = MaterialTheme.colorScheme.secondaryContainer,
             ) {
                 Icon(
@@ -379,13 +410,12 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
                 Icon(Icons.Filled.CloudDownload, contentDescription = "Offline areas")
             }
             FloatingActionButton(
-                onClick = { vm.recenterOnMe() },
+                onClick = onRecenter,
                 containerColor = MaterialTheme.colorScheme.primary,
             ) {
                 Icon(Icons.Filled.MyLocation, contentDescription = "My location")
             }
         }
-    }
 }
 
 /** Compact map color key: difficulty colors in MTB mode, surface colors in ALL mode. */

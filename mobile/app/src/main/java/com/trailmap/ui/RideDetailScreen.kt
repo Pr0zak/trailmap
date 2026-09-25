@@ -1,5 +1,7 @@
 package com.trailmap.ui
 
+import com.trailmap.data.Ride
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -49,7 +51,27 @@ fun RideDetailScreen(
     onOpenTrail: (String) -> Unit,
 ) {
     val ui by vm.state.collectAsStateWithLifecycle()
-    val ride = ui.rides.firstOrNull { it.id == id }
+    RideDetailContent(
+        ride = ui.rides.firstOrNull { it.id == id },
+        onBack = onBack,
+        onOpenTrail = onOpenTrail,
+        onRemoveTrail = { trailId -> vm.removeTrailFromRide(id, trailId) },
+        onRename = { name -> vm.renameRide(id, name) },
+        onDelete = { vm.deleteRide(id) },
+    )
+}
+
+/** Stateless body of [RideDetailScreen], so it can be rendered with sample state. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun RideDetailContent(
+    ride: Ride?,
+    onBack: () -> Unit,
+    onOpenTrail: (String) -> Unit,
+    onRemoveTrail: (String) -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: () -> Unit,
+) {
 
     var showRename by remember { mutableStateOf(false) }
     var showDelete by remember { mutableStateOf(false) }
@@ -137,7 +159,7 @@ fun RideDetailScreen(
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
-                        IconButton(onClick = { vm.removeTrailFromRide(id, t.id) }) {
+                        IconButton(onClick = { onRemoveTrail(t.id) }) {
                             Icon(
                                 Icons.Filled.Close,
                                 contentDescription = "Remove from ride",
@@ -166,7 +188,7 @@ fun RideDetailScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    vm.renameRide(id, name)
+                    onRename(name)
                     showRename = false
                 }) { Text("Save") }
             },
@@ -184,7 +206,7 @@ fun RideDetailScreen(
             confirmButton = {
                 TextButton(onClick = {
                     showDelete = false
-                    vm.deleteRide(id)
+                    onDelete()
                     onBack()
                 }) { Text("Delete") }
             },

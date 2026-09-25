@@ -3,6 +3,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
+    id("app.cash.paparazzi")
 }
 
 android {
@@ -55,4 +56,6 @@ dependencies {
     implementation("org.maplibre.gl:android-sdk:11.5.2")
     // fused location for "trails around me"
     implementation("com.google.android.gms:play-services-location:21.3.0")
+    // Paparazzi: JVM screenshot tests for UI review (test-only, never in the APK)
+    testImplementation("junit:junit:4.13.2")
 }

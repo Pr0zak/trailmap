@@ -25,6 +25,27 @@ import com.trailmap.data.SurfaceType
 import com.trailmap.data.UseType
 import kotlin.math.roundToInt
 
+/** The callbacks [FilterChips] needs, bundled so screens can pass them around as one value. */
+data class FilterActions(
+    val toggleSurface: (SurfaceType) -> Unit = {},
+    val toggleUse: (UseType) -> Unit = {},
+    val setMode: (MapMode) -> Unit = {},
+    val setRadiusMiles: (Int) -> Unit = {},
+    val setMinLength: (Double) -> Unit = {},
+    val setAutoLoad: (Boolean) -> Unit = {},
+) {
+    companion object {
+        fun of(vm: TrailsViewModel) = FilterActions(
+            toggleSurface = { vm.toggleSurface(it) },
+            toggleUse = { vm.toggleUse(it) },
+            setMode = vm::setMode,
+            setRadiusMiles = vm::setRadiusMiles,
+            setMinLength = { vm.setMinLength(it) },
+            setAutoLoad = { vm.setAutoLoadOnPan(it) },
+        )
+    }
+}
+
 /**
  * Filter controls reused on the Map overlay and the Trail list.
  *

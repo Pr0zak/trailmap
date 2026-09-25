@@ -1,5 +1,7 @@
 package com.trailmap.ui
 
+import com.trailmap.data.Ride
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,6 +40,17 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 @Composable
 fun RidesScreen(vm: TrailsViewModel, onOpenRide: (String) -> Unit) {
     val ui by vm.state.collectAsStateWithLifecycle()
+    RidesContent(rides = ui.rides, onOpenRide = onOpenRide, onCreateRide = { vm.createRide(it) })
+}
+
+/** Stateless body of [RidesScreen], so it can be rendered with sample state. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun RidesContent(
+    rides: List<Ride>,
+    onOpenRide: (String) -> Unit,
+    onCreateRide: (String) -> String,
+) {
     var showNewDialog by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -50,7 +63,7 @@ fun RidesScreen(vm: TrailsViewModel, onOpenRide: (String) -> Unit) {
             }
         },
     ) { padding ->
-        if (ui.rides.isEmpty()) {
+        if (rides.isEmpty()) {
             Box(
                 Modifier.padding(padding).fillMaxSize(),
                 Alignment.Center,
@@ -68,7 +81,7 @@ fun RidesScreen(vm: TrailsViewModel, onOpenRide: (String) -> Unit) {
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(ui.rides, key = { it.id }) { ride ->
+                items(rides, key = { it.id }) { ride ->
                     Card(
                         Modifier
                             .fillMaxWidth()
@@ -98,7 +111,7 @@ fun RidesScreen(vm: TrailsViewModel, onOpenRide: (String) -> Unit) {
             onDismiss = { showNewDialog = false },
             onCreate = { name ->
                 showNewDialog = false
-                val rideId = vm.createRide(name)
+                val rideId = onCreateRide(name)
                 onOpenRide(rideId)
             },
         )

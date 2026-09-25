@@ -43,6 +43,32 @@ import com.trailmap.data.DiagLog
 fun DiagnosticsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     var lines by remember { mutableStateOf(DiagLog.snapshot()) }
+    DiagnosticsContent(
+        lines = lines,
+        onBack = onBack,
+        onRefresh = { lines = DiagLog.snapshot() },
+        onShare = {
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, "trailmap diagnostics")
+                putExtra(Intent.EXTRA_TEXT, DiagLog.dump())
+            }
+            context.startActivity(Intent.createChooser(send, "Share log"))
+        },
+        onClear = { DiagLog.clear(); lines = DiagLog.snapshot() },
+    )
+}
+
+/** Stateless body of [DiagnosticsScreen], so it can be rendered with sample lines. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun DiagnosticsContent(
+    lines: List<String>,
+    onBack: () -> Unit,
+    onRefresh: () -> Unit,
+    onShare: () -> Unit,
+    onClear: () -> Unit,
+) {
 
     Scaffold(
         topBar = {
@@ -63,17 +89,10 @@ fun DiagnosticsScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
-                    IconButton(onClick = {
-                        val send = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_SUBJECT, "trailmap diagnostics")
-                            putExtra(Intent.EXTRA_TEXT, DiagLog.dump())
-                        }
-                        context.startActivity(Intent.createChooser(send, "Share log"))
-                    }) {
+                    IconButton(onClick = onShare) {
                         Icon(Icons.Filled.Share, contentDescription = "Share log")
                     }
-                    IconButton(onClick = { DiagLog.clear(); lines = DiagLog.snapshot() }) {
+                    IconButton(onClick = onClear) {
                         Icon(Icons.Filled.Delete, contentDescription = "Clear log")
                     }
                 },
@@ -85,7 +104,7 @@ fun DiagnosticsScreen(onBack: () -> Unit) {
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                OutlinedButton(onClick = { lines = DiagLog.snapshot() }) { Text("Refresh") }
+                OutlinedButton(onClick = onRefresh) { Text("Refresh") }
             }
             if (lines.isEmpty()) {
                 Text(

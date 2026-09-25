@@ -57,6 +57,32 @@ fun TrailListScreen(
     onShowOnMap: () -> Unit,
 ) {
     val ui by vm.state.collectAsStateWithLifecycle()
+    TrailListContent(
+        ui = ui,
+        filters = FilterActions.of(vm),
+        onSetQuery = vm::setQuery,
+        onSetShowSavedOnly = vm::setShowSavedOnly,
+        onToggleSaved = vm::toggleSaved,
+        onOpenTrail = onOpenTrail,
+        onOpenSystem = { system ->
+            vm.focusOn(system.center)
+            onShowOnMap()
+        },
+    )
+}
+
+/** Stateless body of [TrailListScreen], so it can be rendered with sample state. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun TrailListContent(
+    ui: TrailsUiState,
+    filters: FilterActions,
+    onSetQuery: (String) -> Unit,
+    onSetShowSavedOnly: (Boolean) -> Unit,
+    onToggleSaved: (String) -> Unit,
+    onOpenTrail: (String) -> Unit,
+    onOpenSystem: (TrailSystem) -> Unit,
+) {
     // The list honours the radius chip; the map deliberately draws the wider cached set.
     val trails = ui.listed
 
@@ -79,7 +105,7 @@ fun TrailListScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { vm.setShowSavedOnly(!ui.showSavedOnly) }) {
+                    IconButton(onClick = { onSetShowSavedOnly(!ui.showSavedOnly) }) {
                         Icon(
                             if (ui.showSavedOnly) Icons.Filled.Star else Icons.Filled.StarBorder,
                             contentDescription = if (ui.showSavedOnly) "Showing saved only" else "Show saved only",
@@ -97,13 +123,13 @@ fun TrailListScreen(
         Column(Modifier.padding(padding).fillMaxSize()) {
             OutlinedTextField(
                 value = ui.query,
-                onValueChange = vm::setQuery,
+                onValueChange = onSetQuery,
                 singleLine = true,
                 placeholder = { Text("Search trails by name") },
                 leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                 trailingIcon = {
                     if (ui.query.isNotEmpty()) {
-                        IconButton(onClick = { vm.setQuery("") }) {
+                        IconButton(onClick = { onSetQuery("") }) {
                             Icon(Icons.Filled.Clear, contentDescription = "Clear search")
                         }
                     }
@@ -116,12 +142,12 @@ fun TrailListScreen(
 
             FilterChips(
                 ui = ui,
-                onToggleSurface = vm::toggleSurface,
-                onToggleUse = vm::toggleUse,
-                onSetMode = vm::setMode,
-                onSetRadiusMiles = vm::setRadiusMiles,
-                onSetMinLength = vm::setMinLength,
-                onSetAutoLoad = vm::setAutoLoadOnPan,
+                onToggleSurface = filters.toggleSurface,
+                onToggleUse = filters.toggleUse,
+                onSetMode = filters.setMode,
+                onSetRadiusMiles = filters.setRadiusMiles,
+                onSetMinLength = filters.setMinLength,
+                onSetAutoLoad = filters.setAutoLoad,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -146,16 +172,13 @@ fun TrailListScreen(
                 ) {
                     ui.systems.forEach { system ->
                         item(key = "hdr_${system.id}") {
-                            SystemHeader(system) {
-                                vm.focusOn(system.center)
-                                onShowOnMap()
-                            }
+                            SystemHeader(system) { onOpenSystem(system) }
                         }
                         items(system.trails, key = { it.id }) { trail ->
                             TrailRow(
                                 trail = trail,
                                 isSaved = ui.isSaved(trail.id),
-                                onToggleSave = { vm.toggleSaved(trail.id) },
+                                onToggleSave = { onToggleSaved(trail.id) },
                                 onClick = { onOpenTrail(trail.id) },
                             )
                         }
@@ -169,7 +192,7 @@ fun TrailListScreen(
                         TrailRow(
                             trail = trail,
                             isSaved = ui.isSaved(trail.id),
-                            onToggleSave = { vm.toggleSaved(trail.id) },
+                            onToggleSave = { onToggleSaved(trail.id) },
                             onClick = { onOpenTrail(trail.id) },
                         )
                     }
@@ -181,7 +204,7 @@ fun TrailListScreen(
 
 /** Header card for a clustered trail system in MTB mode. Tapping it recenters the map there. */
 @Composable
-private fun SystemHeader(system: TrailSystem, onClick: () -> Unit) {
+internal fun SystemHeader(system: TrailSystem, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -224,7 +247,7 @@ private fun SystemHeader(system: TrailSystem, onClick: () -> Unit) {
 
 /** Difficulty-range pill, e.g. "S1–S4". Renders nothing if no member is rated. */
 @Composable
-private fun ScaleRangeChip(scaleMin: Int?, scaleMax: Int?) {
+internal fun ScaleRangeChip(scaleMin: Int?, scaleMax: Int?) {
     if (scaleMin == null || scaleMax == null) return
     val color = MtbDifficulty.of(scaleMax)?.color ?: MaterialTheme.colorScheme.primary
     val label = if (scaleMin == scaleMax) "S$scaleMin" else "S$scaleMin–S$scaleMax"
@@ -244,7 +267,7 @@ private fun ScaleRangeChip(scaleMin: Int?, scaleMax: Int?) {
 }
 
 @Composable
-private fun TrailRow(
+internal fun TrailRow(
     trail: Trail,
     isSaved: Boolean,
     onToggleSave: () -> Unit,

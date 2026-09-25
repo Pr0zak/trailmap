@@ -50,6 +50,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.trailmap.data.ElevationProfile
+import com.trailmap.data.Trail
 import com.trailmap.data.UseType
 import kotlin.math.roundToInt
 
@@ -59,11 +60,34 @@ fun TrailDetailScreen(vm: TrailsViewModel, id: String, onBack: () -> Unit) {
     val trail = vm.trailById(id)
     val ui by vm.state.collectAsStateWithLifecycle()
     val profiles by vm.profiles.collectAsStateWithLifecycle()
-    val profile: ElevationProfile? = profiles[id]
-    val context = LocalContext.current
-    var showAddToRide by remember { mutableStateOf(false) }
 
     LaunchedEffect(id) { vm.ensureProfile(id) }
+
+    TrailDetailContent(
+        trail = trail,
+        profile = profiles[id],
+        ui = ui,
+        onBack = onBack,
+        onToggleSaved = vm::toggleSaved,
+        onCreateRide = { name, t -> vm.createRide(name, seed = t) },
+        onAddToRide = { rideId, t -> vm.addTrailToRide(rideId, t) },
+    )
+}
+
+/** Stateless body of [TrailDetailScreen], so it can be rendered with sample state. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun TrailDetailContent(
+    trail: Trail?,
+    profile: ElevationProfile?,
+    ui: TrailsUiState,
+    onBack: () -> Unit,
+    onToggleSaved: (String) -> Unit,
+    onCreateRide: (String, Trail) -> Unit,
+    onAddToRide: (String, Trail) -> Unit,
+) {
+    val context = LocalContext.current
+    var showAddToRide by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -83,7 +107,7 @@ fun TrailDetailScreen(vm: TrailsViewModel, id: String, onBack: () -> Unit) {
                             )
                         }
                         val saved = ui.isSaved(trail.id)
-                        IconButton(onClick = { vm.toggleSaved(trail.id) }) {
+                        IconButton(onClick = { onToggleSaved(trail.id) }) {
                             Icon(
                                 if (saved) Icons.Filled.Star else Icons.Filled.StarBorder,
                                 contentDescription = if (saved) "Remove from saved" else "Save trail",
@@ -203,7 +227,7 @@ fun TrailDetailScreen(vm: TrailsViewModel, id: String, onBack: () -> Unit) {
                     showAddToRide = false
                 },
                 onCreate = { name ->
-                    vm.createRide(name, seed = trail)
+                    onCreateRide(name, trail)
                     showNewRide = false
                     showAddToRide = false
                     Toast.makeText(context, "Added to $name", Toast.LENGTH_SHORT).show()
@@ -242,7 +266,7 @@ fun TrailDetailScreen(vm: TrailsViewModel, id: String, onBack: () -> Unit) {
                                 Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        vm.addTrailToRide(ride.id, trail)
+                                        onAddToRide(ride.id, trail)
                                         showAddToRide = false
                                         Toast.makeText(
                                             context,

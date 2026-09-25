@@ -47,7 +47,7 @@ import kotlin.math.floor
 import kotlin.math.max
 
 /** A preset offline region: a labeled bbox with its own zoom depth. */
-private data class PresetRegion(
+internal data class PresetRegion(
     val label: String,
     val north: Double,
     val south: Double,
@@ -57,7 +57,7 @@ private data class PresetRegion(
     val maxZoom: Double,
 )
 
-private val PRESETS = listOf(
+internal val PRESETS = listOf(
     PresetRegion("KC Metro", 39.40, 38.80, -94.30, -94.80, 10.0, 14.0),
     PresetRegion("Lawrence, KS", 38.99, 38.90, -95.15, -95.30, 11.0, 14.0),
     PresetRegion("Columbia, MO", 39.00, 38.88, -92.25, -92.40, 11.0, 14.0),
@@ -101,6 +101,86 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
         }
     }
 
+    fun downloadView() {
+        val vb = ui.viewBounds ?: return
+        val n = nextName(areas.map { it.name }, "Current view")
+        val minZoom = max(10.0, floor(vb.zoom))
+        OfflinePacks.downloadBounds(
+            context, n, styleUrl,
+            vb.north, vb.south, vb.east, vb.west,
+            minZoom, 15.0,
+        ) { s ->
+            status = s
+            refresh()
+        }
+        // Tiles alone give you a basemap with no trails on it; pull the
+        // trail data for the same box so the area is actually usable.
+        vm.prefetchTrailsFor(vb)
+        status = "Starting download…"
+        refresh()
+    }
+
+    fun downloadPreset(preset: PresetRegion) {
+        val n = nextName(areas.map { it.name }, preset.label)
+        OfflinePacks.downloadBounds(
+            context, n, styleUrl,
+            preset.north, preset.south, preset.east, preset.west,
+            preset.minZoom, preset.maxZoom,
+        ) { s ->
+            status = s
+            refresh()
+        }
+        vm.prefetchTrailsFor(
+            com.trailmap.data.ViewBounds(
+                north = preset.north, south = preset.south,
+                east = preset.east, west = preset.west, zoom = preset.minZoom,
+            ),
+        )
+        status = "Starting ${preset.label} download…"
+        refresh()
+    }
+
+    OfflineContent(
+        ui = ui,
+        areas = areas.map { OfflineAreaUi(it.region.id, it.name, it.percent, it.complete, it.completedTiles) },
+        status = status,
+        onBack = onBack,
+        onOpenDiagnostics = onOpenDiagnostics,
+        onDownloadView = ::downloadView,
+        onDownloadPreset = ::downloadPreset,
+        onRetry = { id ->
+            areas.firstOrNull { it.region.id == id }?.let { OfflinePacks.retry(it) { } }
+            refresh()
+        },
+        onDelete = { id -> areas.firstOrNull { it.region.id == id }?.let { OfflinePacks.delete(it) { refresh() } } },
+        onClearTrails = { vm.clearOfflineTrails() },
+    )
+}
+
+/** What the screen shows for one downloaded area — plain data, free of MapLibre types. */
+internal data class OfflineAreaUi(
+    val id: Long,
+    val name: String,
+    val percent: Int,
+    val complete: Boolean,
+    val completedTiles: Long,
+)
+
+/** Stateless body of [OfflineScreen], so it can be rendered with sample state. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun OfflineContent(
+    ui: TrailsUiState,
+    areas: List<OfflineAreaUi>,
+    status: String?,
+    onBack: () -> Unit,
+    onOpenDiagnostics: () -> Unit,
+    onDownloadView: () -> Unit,
+    onDownloadPreset: (PresetRegion) -> Unit,
+    onRetry: (Long) -> Unit,
+    onDelete: (Long) -> Unit,
+    onClearTrails: () -> Unit,
+) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -129,25 +209,7 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
                 Spacer(Modifier.height(8.dp))
                 val vb = ui.viewBounds
                 Button(
-                    onClick = {
-                        if (vb != null) {
-                            val n = nextName(areas, "Current view")
-                            val minZoom = max(10.0, floor(vb.zoom))
-                            OfflinePacks.downloadBounds(
-                                context, n, styleUrl,
-                                vb.north, vb.south, vb.east, vb.west,
-                                minZoom, 15.0,
-                            ) { s ->
-                                status = s
-                                refresh()
-                            }
-                            // Tiles alone give you a basemap with no trails on it; pull the
-                            // trail data for the same box so the area is actually usable.
-                            vm.prefetchTrailsFor(vb)
-                            status = "Starting download…"
-                            refresh()
-                        }
-                    },
+                    onClick = onDownloadView,
                     enabled = vb != null,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -193,25 +255,7 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
 
             items(PRESETS) { preset ->
                 OutlinedButton(
-                    onClick = {
-                        val n = nextName(areas, preset.label)
-                        OfflinePacks.downloadBounds(
-                            context, n, styleUrl,
-                            preset.north, preset.south, preset.east, preset.west,
-                            preset.minZoom, preset.maxZoom,
-                        ) { s ->
-                            status = s
-                            refresh()
-                        }
-                        vm.prefetchTrailsFor(
-                            com.trailmap.data.ViewBounds(
-                                north = preset.north, south = preset.south,
-                                east = preset.east, west = preset.west, zoom = preset.minZoom,
-                            ),
-                        )
-                        status = "Starting ${preset.label} download…"
-                        refresh()
-                    },
+                    onClick = { onDownloadPreset(preset) },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(preset.label, modifier = Modifier.fillMaxWidth())
@@ -236,16 +280,11 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
                     )
                 }
             }
-            items(areas, key = { it.region.id }) { area ->
+            items(areas, key = { it.id }) { area ->
                 AreaRow(
                     area = area,
-                    onRetry = {
-                        OfflinePacks.retry(area) { }
-                        refresh()
-                    },
-                    onDelete = {
-                        OfflinePacks.delete(area) { refresh() }
-                    },
+                    onRetry = { onRetry(area.id) },
+                    onDelete = { onDelete(area.id) },
                 )
             }
 
@@ -274,7 +313,7 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
                 )
                 if (ui.offlineTrailBytes > 0L) {
                     OutlinedButton(
-                        onClick = { vm.clearOfflineTrails() },
+                        onClick = onClearTrails,
                         modifier = Modifier.padding(top = 8.dp),
                     ) {
                         Text("Clear offline trail data")
@@ -299,7 +338,7 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
 }
 
 @Composable
-private fun AreaRow(area: OfflineArea, onRetry: () -> Unit, onDelete: () -> Unit) {
+private fun AreaRow(area: OfflineAreaUi, onRetry: () -> Unit, onDelete: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
@@ -342,9 +381,9 @@ private fun AreaRow(area: OfflineArea, onRetry: () -> Unit, onDelete: () -> Unit
 }
 
 /** Next free "<base> N" name given the areas already present (so repeats don't collide). */
-private fun nextName(areas: List<OfflineArea>, base: String): String {
+private fun nextName(names: List<String>, base: String): String {
     var i = 1
-    val existing = areas.map { it.name }.toSet()
+    val existing = names.toSet()
     while ("$base $i" in existing) i++
     return "$base $i"
 }
