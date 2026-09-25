@@ -14,6 +14,7 @@ import kotlin.concurrent.thread
  */
 class MirrorHedgingTest {
     private val sockets = mutableListOf<ServerSocket>()
+    private val hits = java.util.concurrent.atomic.AtomicInteger()
 
     /** A one-route HTTP/1.1 server that answers every POST with an empty result after [delayMs]. */
     private fun server(delayMs: Long): String {
@@ -35,6 +36,7 @@ class MirrorHedgingTest {
                                 }
                             }
                             repeat(length) { input.read() }
+                            hits.incrementAndGet()
                             Thread.sleep(delayMs)
                             val body = """{"elements":[]}"""
                             c.getOutputStream().write(
@@ -72,5 +74,20 @@ class MirrorHedgingTest {
         client.fetchTrails(GeoPoint(39.0997, -94.5786), 16000)
         val took = System.currentTimeMillis() - t
         assertTrue("took $took ms", took < 3_000)
+    }
+
+    @Test fun mtbTrailsArriveBeforeParkNames() = runBlocking {
+        // A cache directory, as the app always has: the trail response is kept there, so the
+        // follow-up call reads it back instead of asking again.
+        val cache = kotlin.io.path.createTempDirectory("trailmap-cache").toFile()
+        val client = OverpassClient(cacheDir = cache, endpoints = listOf(server(delayMs = 50)))
+        val center = GeoPoint(39.0997, -94.5786)
+        val first = client.fetchTrails(center, 40233, mtb = true, withParks = false)
+        assertTrue("parks should be pending", first.parksPending)
+        assertTrue("one request for trails, got ${hits.get()}", hits.get() == 1)
+        val second = client.fetchTrails(center, 40233, mtb = true)
+        assertTrue("parks should be in", !second.parksPending)
+        // Trails come from the in-memory parse cache; only the park query goes out.
+        assertTrue("one more request for parks, got ${hits.get()}", hits.get() == 2)
     }
 }

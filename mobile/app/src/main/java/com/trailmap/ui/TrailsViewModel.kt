@@ -351,10 +351,10 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 // and with three mirrors plus a retry a dead network could hold the "Loading
                 // trails" pill up for over two minutes — observed at 80 s with all three
                 // mirrors down. Better to say so quickly and leave the cached trails drawn.
-                withTimeoutOrNull(LOAD_BUDGET_MS) {
+                withTimeoutOrNull(if (mtb) MTB_LOAD_BUDGET_MS else LOAD_BUDGET_MS) {
                 while (attempt < MAX_ATTEMPTS) {
                     try {
-                        fetched = overpass.fetchTrails(center, radiusMeters, mtb = mtb, forceRefresh = force)
+                        fetched = overpass.fetchTrails(center, radiusMeters, mtb = mtb, forceRefresh = force, withParks = false)
                         failure = null
                         break
                     } catch (e: CancellationException) {
@@ -407,6 +407,26 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                         // Keep the peek card open only if the tapped trail survived the reload.
                         selectedTrailId = s.selectedTrailId?.takeIf { id -> trails.any { it.id == id } },
                     )
+                }
+
+                // MTB: the trails are up; now fetch the park polygons that name the systems.
+                // Same job, so a newer load cancels this too. The trail elements are memoized,
+                // so this second call only costs the park query.
+                if (result.parksPending) {
+                    val named = runCatching {
+                        withTimeoutOrNull(PARKS_BUDGET_MS) {
+                            overpass.fetchTrails(center, radiusMeters, mtb = true, forceRefresh = force)
+                        }
+                    }.getOrElse { if (it is CancellationException) throw it else null }
+                    if (named == null || seq != loadSeq) {
+                        DiagLog.log("load", "park names unavailable; systems keep fallback names")
+                    } else {
+                        val renamed = withContext(Dispatchers.Default) {
+                            mergeArea(named.servedCenter, named.servedRadius, mtb, named.trails, center)
+                        }
+                        DiagLog.log("load", "park names added")
+                        _state.update { it.copy(trails = renamed, trailsVersion = it.trailsVersion + 1) }
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -1097,5 +1117,14 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
 
         /** Ceiling on one load, across every mirror and retry. */
         private const val LOAD_BUDGET_MS = 25_000L
+
+        /**
+         * [LOAD_BUDGET_MS] for MTB. Its 40 km trail query takes 32-38 s on a healthy public
+         * mirror (measured), so 25 s meant MTB mode could never load at all.
+         */
+        private const val MTB_LOAD_BUDGET_MS = 90_000L
+
+        /** How long the follow-up park query may take before systems keep their fallback names. */
+        private const val PARKS_BUDGET_MS = 60_000L
     }
 }

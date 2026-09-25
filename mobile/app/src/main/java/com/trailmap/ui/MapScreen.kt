@@ -325,6 +325,8 @@ internal fun BoxScope.MapOverlays(
             } else {
                 StatusPill(
                     when {
+                        ui.loading && ui.mode == MapMode.MTB ->
+                            "Loading mountain-bike trails… the first load can take up to a minute"
                         ui.loading -> "Updating trails…"
                         // At a wide zoom the fetch covers the middle of the screen, not all of
                         // it. Say so, so a sparse map reads as the edge of what was pulled.

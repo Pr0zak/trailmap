@@ -44,7 +44,13 @@ import kotlin.math.cos
  * Trails for an area, plus the circle the data actually covers — which is not always the one
  * that was asked for, since a cached pull can answer a nearby request.
  */
-class TrailsResult(val trails: List<Trail>, val servedCenter: GeoPoint, val servedRadius: Int)
+class TrailsResult(
+    val trails: List<Trail>,
+    val servedCenter: GeoPoint,
+    val servedRadius: Int,
+    /** MTB only: the trails came back before the park names did; ask again with parks. */
+    val parksPending: Boolean = false,
+)
 
 /**
  * @param cacheDir  transient responses, under the OS-evictable cache directory and swept by TTL.
@@ -168,6 +174,7 @@ class OverpassClient(
         mtb: Boolean = false,
         forceRefresh: Boolean = false,
         durable: Boolean = false,
+        withParks: Boolean = true,
     ): TrailsResult =
         withContext(Dispatchers.IO) {
             lastServedStale = false
@@ -180,10 +187,15 @@ class OverpassClient(
                     durable,
                 )
                 coroutineContext.ensureActive()
-                val parks = runCatching { parksFor(center, radiusMeters, forceRefresh, durable) }
+                // Park polygons only name the systems, and on a public mirror they cost another
+                // ~13 s after the ~35 s trail query. Without [withParks] they're used only if
+                // already on hand, and the caller is told to come back for them — so the
+                // trails show as soon as they arrive and the names fill in afterwards.
+                val parksOnHand = withParks || parksReady(center, radiusMeters)
+                val parks = if (!parksOnHand) emptyList() else runCatching { parksFor(center, radiusMeters, forceRefresh, durable) }
                     .getOrElse { if (it is CancellationException) throw it else emptyList() }
                 coroutineContext.ensureActive()
-                TrailsResult(buildMtbTrails(e.elements, center, parks), e.center, e.radius)
+                TrailsResult(buildMtbTrails(e.elements, center, parks), e.center, e.radius, parksPending = !parksOnHand)
             } else {
                 val e = elementsFor(
                     "all", center, radiusMeters, forceRefresh, buildQuery(center, radiusMeters),
@@ -259,7 +271,10 @@ class OverpassClient(
                 return Elements(it.elements, source.center, source.radius)
             }
         }
-        val raw = cachedRaw(kind, center, radiusMeters, forceRefresh, durable) { post(query) }
+        // Heavy queries (MTB, parks: 30 s+ on a public mirror) wait longer before a second
+        // mirror is asked, or every one of them would be run twice.
+        val hedge = if (kind == "all") HEDGE_AFTER_MS else HEAVY_HEDGE_AFTER_MS
+        val raw = cachedRaw(kind, center, radiusMeters, forceRefresh, durable) { post(query, hedge) }
         coroutineContext.ensureActive()
         val parsed = parseResponse(raw.text).elements
         DiagLog.log(
@@ -299,6 +314,13 @@ class OverpassClient(
         lastParksCenter = center
         lastParksRadius = radiusMeters
         return parks
+    }
+
+    /** Whether [parksFor] can answer without the network: reusable, in memory or on disk. */
+    private fun parksReady(center: GeoPoint, radiusMeters: Int): Boolean {
+        val reusable = lastParksCenter != null && lastParksRadius >= radiusMeters &&
+            Geo.haversineMeters(lastParksCenter!!, center) < lastParksRadius * PARK_REUSE_FRACTION
+        return reusable || coveringCache("parks", center, radiusMeters) != null
     }
 
     private var lastParks: List<Park> = emptyList()
@@ -474,12 +496,17 @@ class OverpassClient(
         }
     }
 
+    // The [timeout:N] each query declares is kept close to what it really needs. Overpass
+    // admits a query against the time it declares, so a busy server refuses a generous one
+    // outright: measured against overpass-api.de from Kansas City, the 40 km MTB query was
+    // accepted 3 of 3 times declaring 45 s (32-38 s each) and 504'd on half its tries
+    // declaring 180 s.
     private fun buildQuery(center: GeoPoint, radiusMeters: Int): String {
         val r = radiusMeters
         val lat = center.lat
         val lon = center.lon
         return """
-            [out:json][timeout:90];
+            [out:json][timeout:45];
             (
               way["highway"~"^(path|cycleway|track|bridleway)$"]["name"](around:$r,$lat,$lon);
               way["highway"="footway"]["footway"!~"sidewalk|crossing|traffic_island|access_aisle"]["name"](around:$r,$lat,$lon);
@@ -493,7 +520,7 @@ class OverpassClient(
         val lat = center.lat
         val lon = center.lon
         return """
-            [out:json][timeout:180];
+            [out:json][timeout:60];
             (
               way["mtb:scale"]["name"](around:$r,$lat,$lon);
               way["highway"="path"]["bicycle"="designated"]["surface"~"ground|dirt|earth|fine_gravel|gravel|compacted"]["name"](around:$r,$lat,$lon);
@@ -509,7 +536,7 @@ class OverpassClient(
         val lat = center.lat
         val lon = center.lon
         return """
-            [out:json][timeout:120];
+            [out:json][timeout:45];
             (
               way["leisure"~"^(park|nature_reserve|recreation_ground)$"]["name"](around:$r,$lat,$lon);
               way["boundary"~"^(protected_area|national_park)$"]["name"](around:$r,$lat,$lon);
@@ -583,7 +610,7 @@ class OverpassClient(
             .minByOrNull { it.bboxArea }?.name
 
     @OptIn(ExperimentalCoroutinesApi::class) // select { onTimeout }
-    private suspend fun post(query: String): String {
+    private suspend fun post(query: String, hedgeAfterMs: Long = HEDGE_AFTER_MS): String {
         // Pan-triggered loading can ask for a lot, so keep a floor on how often anything
         // actually goes on the wire. This throttles; it never refuses.
         val sinceLast = System.currentTimeMillis() - lastNetworkAt
@@ -617,13 +644,13 @@ class OverpassClient(
             while (true) {
                 val finished: Pair<String, Result<String>>? = select {
                     pending.forEach { (url, d) -> d.onAwait { url to it } }
-                    if (next < order.size) onTimeout(HEDGE_AFTER_MS) { null }
+                    if (next < order.size) onTimeout(hedgeAfterMs) { null }
                 }
                 if (finished == null) {
                     DiagLog.log(
                         "http",
                         "no answer from ${pending.joinToString { host(it.first) }} in " +
-                            "${HEDGE_AFTER_MS / 1000} s, also asking ${host(order[next])}",
+                            "${hedgeAfterMs / 1000} s, also asking ${host(order[next])}",
                     )
                     startNext()
                     continue
@@ -1082,6 +1109,9 @@ class OverpassClient(
          * inside the ViewModel's 25 s load budget.
          */
         const val HEDGE_AFTER_MS = 8000L
+
+        /** [HEDGE_AFTER_MS] for the heavy MTB and park queries, which take 30 s+ when healthy. */
+        const val HEAVY_HEDGE_AFTER_MS = 25_000L
         /** How long to stop asking after a mirror returns 429/504. */
         const val RATE_LIMIT_COOLDOWN_MS = 30_000L
         /**
