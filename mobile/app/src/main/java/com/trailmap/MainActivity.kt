@@ -4,7 +4,13 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Map
@@ -164,7 +170,24 @@ private fun UpdateGate() {
         onDismissRequest = { if (!busy) update = null },
         title = { Text("Update available") },
         text = {
-            Text("trailmap ${info.version} is available — you have ${UpdateChecker.currentVersion()}.")
+            Column {
+                Text("trailmap ${info.version} is available — you have ${UpdateChecker.currentVersion()}.")
+                // The release body is fetched with the version check; show what changed.
+                val notes = info.notes?.trim().orEmpty()
+                if (notes.isNotEmpty()) {
+                    Text(
+                        "What's new",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
+                    )
+                    Text(
+                        notes,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState()),
+                    )
+                }
+            }
         },
         confirmButton = {
             TextButton(

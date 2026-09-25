@@ -331,7 +331,8 @@ fun SurfaceBadge(surface: SurfaceType, modifier: Modifier = Modifier) {
             surface.label.uppercase(),
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
-            color = Color.White,
+            // White on gravel gold is 2.2:1; dark brown is 6.2:1.
+            color = if (surface == SurfaceType.GRAVEL) Color(0xFF3A2A00) else Color.White,
         )
     }
 }

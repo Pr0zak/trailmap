@@ -30,6 +30,7 @@ import androidx.compose.material3.ElevatedButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
@@ -270,76 +271,56 @@ internal fun BoxScope.MapOverlays(
     onOpenOffline: () -> Unit,
     onRecenter: () -> Unit,
 ) {
-        // top overlay: filter chips on a translucent rounded surface
-        Surface(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .fillMaxWidth()
-                .padding(8.dp),
-            shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-        ) {
-            FilterChips(
-                ui = ui,
-                onToggleSurface = filters.toggleSurface,
-                onToggleUse = filters.toggleUse,
-                onSetMode = filters.setMode,
-                onSetRadiusMiles = filters.setRadiusMiles,
-                onSetMinLength = filters.setMinLength,
-                onSetAutoLoad = filters.setAutoLoad,
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-            )
-        }
-
-        // Status strip, tucked under the two chip rows: a loading pill while a fetch is in
-        // flight, otherwise a "Search this area" button when the view has drifted off the
-        // loaded trails and auto-load won't cover it (turned off, or zoomed too far out).
-        // Auto-load now always fires when the view goes stale, so the manual button is for
-        // the case where the user has turned that off — not for wide zooms, which load a
-        // partial area and say so rather than refusing.
-        val offerManualSearch = ui.viewportStale && !ui.loading && !ui.autoLoadOnPan
+        // Top: the filter card with the status strip stacked under it in one column, so the
+        // strip follows the card's real height. It used to sit at a fixed 108 dp, which put
+        // the loading pill on top of the card's second chip row.
         Column(
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = 108.dp),
+            modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (ui.loading) {
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
-                    shadowElevation = 4.dp,
-                ) {
-                    Row(
-                        Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.size(8.dp))
-                        Text("Loading trails…", style = MaterialTheme.typography.labelMedium)
-                    }
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.94f),
+                shadowElevation = 3.dp,
+            ) {
+                Column {
+                    FilterChips(
+                        ui = ui,
+                        onToggleSurface = filters.toggleSurface,
+                        onToggleUse = filters.toggleUse,
+                        onSetMode = filters.setMode,
+                        onSetRadiusMiles = filters.setRadiusMiles,
+                        onSetMinLength = filters.setMinLength,
+                        onSetAutoLoad = filters.setAutoLoad,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    )
+                    // Loading is a thin bar along the card's bottom edge: visible, but it
+                    // covers no map and doesn't shift anything when it comes and goes.
+                    if (ui.loading) LinearProgressIndicator(Modifier.fillMaxWidth().height(3.dp))
                 }
-            } else if (offerManualSearch) {
+            }
+
+            // Under the card: a "Search this area" button when the view has drifted off the
+            // loaded trails and auto-load is off, otherwise a quiet count of what's drawn.
+            val offerManualSearch = ui.viewportStale && !ui.loading && !ui.autoLoadOnPan
+            if (offerManualSearch) {
                 ElevatedButton(onClick = { onSearchThisArea() }) {
                     Icon(Icons.Filled.Search, contentDescription = null, Modifier.size(16.dp))
                     Spacer(Modifier.size(6.dp))
                     Text("Search this area")
                 }
-            }
-
-            // At a wide zoom the fetch covers the middle of the screen, not all of it. Say so,
-            // so a sparse map reads as "this is the edge of what was pulled" rather than a bug.
-            if (!ui.canAutoCover && !ui.loading && ui.error == null) {
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
-                ) {
-                    Text(
-                        "Trails near the map centre · zoom in for more",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                    )
-                }
+            } else {
+                StatusPill(
+                    when {
+                        ui.loading -> "Updating trails…"
+                        // At a wide zoom the fetch covers the middle of the screen, not all of
+                        // it. Say so, so a sparse map reads as the edge of what was pulled.
+                        !ui.canAutoCover && ui.error == null -> "${trailCount(ui.filtered.size)} near the centre · zoom in for more"
+                        else -> trailCount(ui.filtered.size)
+                    },
+                )
             }
 
             val notice = ui.error
@@ -377,8 +358,9 @@ internal fun BoxScope.MapOverlays(
             mode = ui.mode,
             dark = dark,
             modifier = Modifier
-                .align(Alignment.CenterStart)
-                .padding(start = 8.dp),
+                .align(Alignment.BottomStart)
+                // Above the MapLibre attribution, and above the peek card when one is up.
+                .padding(start = 8.dp, bottom = if (selectedTrail != null) 160.dp else 40.dp),
         )
 
         // right-edge controls: theme toggle, offline download, my-location.
@@ -418,62 +400,91 @@ internal fun BoxScope.MapOverlays(
         }
 }
 
-/** Compact map color key: difficulty colors in MTB mode, surface colors in ALL mode. */
+/** "1 trail" / "12 trails". */
+private fun trailCount(n: Int) = if (n == 1) "1 trail" else "$n trails"
+
+/** A small translucent pill of status text under the filter card. */
 @Composable
-private fun MapLegend(mode: MapMode, dark: Boolean, modifier: Modifier = Modifier) {
-    val title: String
-    val items: List<Pair<Color, String>>
-    if (mode == MapMode.MTB) {
-        title = "Difficulty"
-        items = listOf(
-            Color((if (dark) 0xFF66D08A else 0xFF43A047).toInt()) to "Easy",
-            Color((if (dark) 0xFF5BB0F5 else 0xFF1E88E5).toInt()) to "Intermediate",
-            Color((if (dark) 0xFFBDBDBD else 0xFF424242).toInt()) to "Advanced",
-            Color((if (dark) 0xFFFF6B6B else 0xFFE53935).toInt()) to "Expert",
-        )
-    } else {
-        title = "Surface"
-        items = listOf(
-            Color((if (dark) 0xFF4CC57F else 0xFF2E7D4F).toInt()) to "Paved",
-            Color((if (dark) 0xFFF2C744 else 0xFFDAA520).toInt()) to "Gravel",
-            Color((if (dark) 0xFFCC7A4D else 0xFFA0522D).toInt()) to "Dirt",
+private fun StatusPill(text: String) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.92f),
+        shadowElevation = 2.dp,
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
         )
     }
+}
+
+/**
+ * One-line map color key: surface colors in ALL mode, all seven mtb:scale grades in MTB mode.
+ * The swatches are the line colors [trailColorExpr] draws — not the badge fills, which are
+ * darker so their white labels stay readable.
+ */
+@Composable
+private fun MapLegend(mode: MapMode, dark: Boolean, modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-        shadowElevation = 4.dp,
+        color = MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.92f),
+        shadowElevation = 2.dp,
     ) {
-        Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Spacer(Modifier.size(4.dp))
-            items.forEach { (color, label) ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier
-                            .width(14.dp)
-                            .height(4.dp)
-                            .clip(RoundedCornerShape(50))
-                            .background(color),
-                    )
-                    Spacer(Modifier.size(6.dp))
-                    Text(
-                        label,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
+        if (mode == MapMode.MTB) {
+            Row(
+                Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                MTB_LINE_COLORS.forEachIndexed { scale, (light, darkColor) ->
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Swatch(Color((if (dark) darkColor else light).toInt()), 22)
+                        Text("S$scale", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+                    }
                 }
-                Spacer(Modifier.size(3.dp))
+            }
+        } else {
+            Row(
+                Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SURFACE_LINE_COLORS.forEach { (label, colors) ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Swatch(Color((if (dark) colors.second else colors.first).toInt()), 14)
+                        Spacer(Modifier.size(4.dp))
+                        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+                    }
+                }
             }
         }
     }
 }
+
+@Composable
+private fun Swatch(color: Color, widthDp: Int) = Box(
+    Modifier.width(widthDp.dp).height(4.dp).clip(RoundedCornerShape(50)).background(color),
+)
+
+/** mtb:scale 0..6 line colors as (light basemap, dark basemap). Shared by the lines and legend. */
+private val MTB_LINE_COLORS = listOf(
+    0xFF43A047 to 0xFF66D08A,
+    0xFF1E9E6A to 0xFF3FD89A,
+    0xFF1E88E5 to 0xFF5BB0F5,
+    0xFF424242 to 0xFFBDBDBD,
+    0xFFE53935 to 0xFFFF6B6B,
+    0xFFB71C1C to 0xFFE57373,
+    0xFF7F0000 to 0xFFD84343,
+)
+
+/** Surface line colors as (light, dark). Shared by the lines and legend. */
+private val SURFACE_LINE_COLORS = listOf(
+    "Paved" to (0xFF2E7D4F to 0xFF4CC57F),
+    "Gravel" to (0xFFDAA520 to 0xFFF2C744),
+    "Dirt" to (0xFFA0522D to 0xFFCC7A4D),
+)
 
 @Composable
 private fun NearestTrailCard(
@@ -574,23 +585,23 @@ private fun lineWidthExpr(extra: Float = 0f): Expression =
  * difficulty; everything else ("none") falls through to the surface color. One expression
  * serves both ALL mode (all "none" → surface colors) and MTB mode (rated → difficulty).
  */
-private fun trailColorExpr(dark: Boolean): Expression = Expression.match(
-    Expression.get("mtb"),
-    Expression.literal("0"), Expression.color((if (dark) 0xFF66D08A else 0xFF43A047).toInt()),
-    Expression.literal("1"), Expression.color((if (dark) 0xFF3FD89A else 0xFF1E9E6A).toInt()),
-    Expression.literal("2"), Expression.color((if (dark) 0xFF5BB0F5 else 0xFF1E88E5).toInt()),
-    Expression.literal("3"), Expression.color((if (dark) 0xFFBDBDBD else 0xFF424242).toInt()),
-    Expression.literal("4"), Expression.color((if (dark) 0xFFFF6B6B else 0xFFE53935).toInt()),
-    Expression.literal("5"), Expression.color((if (dark) 0xFFE57373 else 0xFFB71C1C).toInt()),
-    Expression.literal("6"), Expression.color((if (dark) 0xFFD84343 else 0xFF7F0000).toInt()),
-    surfaceColorExpr(dark), // default: unrated trails → surface color
-)
+private fun trailColorExpr(dark: Boolean): Expression {
+    val stops = MTB_LINE_COLORS.flatMapIndexed { scale, (light, darkColor) ->
+        listOf(Expression.literal("$scale"), Expression.color((if (dark) darkColor else light).toInt()))
+    }
+    return Expression.match(
+        Expression.get("mtb"),
+        *stops.toTypedArray(),
+        surfaceColorExpr(dark), // default: unrated trails → surface color
+    )
+}
 
 /** Data-driven line color by "surface", brightened on the dark basemap for contrast. */
 private fun surfaceColorExpr(dark: Boolean): Expression {
-    val paved = if (dark) 0xFF4CC57F else 0xFF2E7D4F
-    val gravel = if (dark) 0xFFF2C744 else 0xFFDAA520  // gold
-    val dirt = if (dark) 0xFFCC7A4D else 0xFFA0522D    // sienna
+    fun pick(i: Int) = SURFACE_LINE_COLORS[i].second.let { if (dark) it.second else it.first }
+    val paved = pick(0)
+    val gravel = pick(1) // gold
+    val dirt = pick(2)   // sienna
     val unknown = if (dark) 0xFFB6B6B6 else 0xFF7A7A7A
     return Expression.match(
         Expression.get("surface"),

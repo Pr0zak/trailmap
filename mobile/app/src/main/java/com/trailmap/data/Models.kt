@@ -44,7 +44,7 @@ enum class SurfaceType(val label: String, val color: Color) {
     PAVED("Paved", Color(0xFF2E7D4F)),   // green
     GRAVEL("Gravel", Color(0xFFDAA520)), // goldenrod — distinct gold/yellow
     DIRT("Dirt", Color(0xFFA0522D)),     // sienna — distinct red-brown
-    UNKNOWN("Unknown", Color(0xFF7A7A7A));
+    UNKNOWN("Unknown", Color(0xFF616161));
 
     companion object {
         /** Map a raw OSM surface tag to a bucket. */
@@ -71,11 +71,13 @@ enum class UseType(val label: String) { WALK("Walking"), BIKE("Biking") }
 
 /** OSM mtb:scale (0..6) mapped to IMBA-ish difficulty labels + colors for MTB mode. */
 enum class MtbDifficulty(val scale: Int, val label: String, val color: Color) {
-    S0(0, "Beginner", Color(0xFF43A047)),
-    S1(1, "Easy", Color(0xFF1E9E6A)),
-    S2(2, "Intermediate", Color(0xFF1E88E5)),
+    // Badge fills, each dark enough for white label text (>= 4.5:1). The map's line colors
+    // are separate and brighter — see trailColorExpr in MapScreen.
+    S0(0, "Beginner", Color(0xFF2E7D32)),
+    S1(1, "Easy", Color(0xFF00796B)),
+    S2(2, "Intermediate", Color(0xFF1976D2)),
     S3(3, "Advanced", Color(0xFF424242)),
-    S4(4, "Expert", Color(0xFFE53935)),
+    S4(4, "Expert", Color(0xFFD32F2F)),
     S5(5, "Expert+", Color(0xFFB71C1C)),
     S6(6, "Extreme", Color(0xFF7F0000));
 

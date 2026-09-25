@@ -14,7 +14,7 @@ import com.trailmap.snap.after.RidesAfter
 import org.junit.Rule
 import org.junit.Test
 
-/** The proposals in the UI review, rendered with the same [Samples] as [BeforeSnapshots]. */
+/** The proposals in the UI review, rendered with the same [Samples] as [ScreenSnapshots]. */
 class AfterSnapshots {
     @get:Rule val paparazzi = Paparazzi(deviceConfig = DeviceConfig.PIXEL_5)
 

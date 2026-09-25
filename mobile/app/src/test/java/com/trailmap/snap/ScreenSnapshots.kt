@@ -20,8 +20,8 @@ import com.trailmap.ui.theme.TrailmapTheme
 import org.junit.Rule
 import org.junit.Test
 
-/** The app as it is today (app-v0.11.1), each screen fed [Samples]. */
-class BeforeSnapshots {
+/** The app as it is now, each screen fed [Samples]. The UI review's "before" images were these at app-v0.11.1. */
+class ScreenSnapshots {
     @get:Rule val paparazzi = Paparazzi(deviceConfig = DeviceConfig.PIXEL_5)
 
     private fun shot(dark: Boolean = false, content: @Composable () -> Unit) =
