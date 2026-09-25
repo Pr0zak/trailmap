@@ -1,6 +1,21 @@
 package com.trailmap.ui
 
 import com.trailmap.data.Ride
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Route
+import androidx.compose.material3.Button
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Surface
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.layout.Spacer
+import android.widget.Toast
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.ui.platform.LocalContext
+import com.trailmap.data.Trail
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -38,9 +53,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RidesScreen(vm: TrailsViewModel, onOpenRide: (String) -> Unit) {
+fun RidesScreen(vm: TrailsViewModel, onOpenRide: (String) -> Unit, onBrowseTrails: () -> Unit = {}) {
     val ui by vm.state.collectAsStateWithLifecycle()
-    RidesContent(rides = ui.rides, onOpenRide = onOpenRide, onCreateRide = { vm.createRide(it) })
+    RidesContent(
+        rides = ui.rides,
+        onOpenRide = onOpenRide,
+        onCreateRide = { vm.createRide(it) },
+        onBrowseTrails = onBrowseTrails,
+    )
 }
 
 /** Stateless body of [RidesScreen], so it can be rendered with sample state. */
@@ -50,6 +70,7 @@ internal fun RidesContent(
     rides: List<Ride>,
     onOpenRide: (String) -> Unit,
     onCreateRide: (String) -> String,
+    onBrowseTrails: () -> Unit = {},
 ) {
     var showNewDialog by remember { mutableStateOf(false) }
 
@@ -58,50 +79,37 @@ internal fun RidesContent(
             TopAppBar(title = { Text("Rides", fontWeight = FontWeight.Bold) })
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showNewDialog = true }) {
-                Icon(Icons.Filled.Add, contentDescription = "New ride")
-            }
+            ExtendedFloatingActionButton(
+                onClick = { showNewDialog = true },
+                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                text = { Text("New ride") },
+            )
         },
     ) { padding ->
         if (rides.isEmpty()) {
-            Box(
-                Modifier.padding(padding).fillMaxSize(),
-                Alignment.Center,
+            Column(
+                Modifier.padding(padding).fillMaxSize().padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
             ) {
+                Icon(Icons.Filled.Route, contentDescription = null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.size(12.dp))
+                Text("Plan a ride", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 Text(
-                    "No rides yet — open a trail and tap 'Add to ride', or create one with +",
-                    style = MaterialTheme.typography.bodyMedium,
+                    "Chain trails together to see the total distance and surface mix before you go.",
+                    textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(32.dp),
                 )
+                Spacer(Modifier.size(16.dp))
+                Button(onClick = onBrowseTrails) { Text("Browse trails") }
             }
         } else {
             LazyColumn(
                 modifier = Modifier.padding(padding).fillMaxSize(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 88.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(rides, key = { it.id }) { ride ->
-                    Card(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable { onOpenRide(ride.id) },
-                    ) {
-                        Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                            Text(
-                                ride.name,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                            )
-                            Spacer4()
-                            Text(
-                                "${ride.trails.size} trails · %.1f mi".format(ride.totalMiles),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
+                items(rides, key = { it.id }) { ride -> RideCard(ride) { onOpenRide(ride.id) } }
             }
         }
     }
@@ -118,8 +126,44 @@ internal fun RidesContent(
     }
 }
 
+/** A ride at a glance: name and total, the trail sequence, and its surface split. */
 @Composable
-private fun Spacer4() = androidx.compose.foundation.layout.Spacer(Modifier.size(4.dp))
+private fun RideCard(ride: Ride, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        ride.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text("%.1f mi".format(ride.totalMiles), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                }
+                Text(
+                    if (ride.trails.isEmpty()) "No trails yet" else ride.trails.joinToString(" → ") { it.name },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (ride.trails.isNotEmpty()) {
+                    Spacer(Modifier.size(10.dp))
+                    SurfaceMixBar(ride.surfaceMixTyped(), legend = false)
+                }
+            }
+            Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
 
 /** Shared "name a new ride" dialog: an OutlinedTextField + Create. */
 @Composable
@@ -146,4 +190,98 @@ fun NewRideDialog(onDismiss: () -> Unit, onCreate: (String) -> Unit) {
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
+}
+
+/**
+ * "Add to ride": pick one of [rides] or start a new one seeded with [trail]. Shared by the
+ * trail detail screen and the map's peek card.
+ */
+@Composable
+fun AddToRideDialog(
+    rides: List<Ride>,
+    trail: Trail,
+    onDismiss: () -> Unit,
+    onCreateRide: (String, Trail) -> Unit,
+    onAddToRide: (String, Trail) -> Unit,
+) {
+    val context = LocalContext.current
+    var showNewRide by remember { mutableStateOf(false) }
+    if (showNewRide) {
+        NewRideDialog(
+            onDismiss = {
+                showNewRide = false
+                onDismiss()
+            },
+            onCreate = { name ->
+                onCreateRide(name, trail)
+                showNewRide = false
+                onDismiss()
+                Toast.makeText(context, "Added to $name", Toast.LENGTH_SHORT).show()
+            },
+        )
+    } else {
+        AlertDialog(
+            onDismissRequest = { onDismiss() },
+            title = { Text("Add to ride") },
+            text = {
+                LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                    item(key = "new") {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { showNewRide = true }
+                                .padding(vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.PlaylistAdd,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                            Spacer(Modifier.size(12.dp))
+                            Text(
+                                "New ride…",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                    items(rides, key = { it.id }) { ride ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onAddToRide(ride.id, trail)
+                                    onDismiss()
+                                    Toast.makeText(
+                                        context,
+                                        "Added to ${ride.name}",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                                .padding(vertical = 14.dp),
+                        ) {
+                            Column {
+                                Text(
+                                    ride.name,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    "${ride.trails.size} trails",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { onDismiss() }) { Text("Close") }
+            },
+        )
+    }
 }

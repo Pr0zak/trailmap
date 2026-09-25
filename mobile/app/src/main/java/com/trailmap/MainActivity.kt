@@ -87,6 +87,13 @@ private fun TrailmapRoot(vm: TrailsViewModel) {
     val backStack by nav.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route
 
+    // Switch to a top-level tab the way the bottom bar does, keeping each tab's state.
+    fun goToTab(tab: Tab) = nav.navigate(tab.route) {
+        popUpTo(Tab.Map.route) { saveState = true }
+        launchSingleTop = true
+        restoreState = true
+    }
+
     Scaffold(
         bottomBar = {
             // Bar shows on top-level tabs; hidden on detail/ride/offline for an immersive read.
@@ -96,13 +103,7 @@ private fun TrailmapRoot(vm: TrailsViewModel) {
                         val selected = backStack?.destination?.hierarchy?.any { it.route == tab.route } == true
                         NavigationBarItem(
                             selected = selected,
-                            onClick = {
-                                nav.navigate(tab.route) {
-                                    popUpTo(Tab.Map.route) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
+                            onClick = { goToTab(tab) },
                             icon = {
                                 Icon(
                                     when (tab) {
@@ -132,21 +133,24 @@ private fun TrailmapRoot(vm: TrailsViewModel) {
                 TrailListScreen(
                     vm,
                     onOpenTrail = { id -> nav.navigate("detail/$id") },
-                    onShowOnMap = {
-                        nav.navigate(Tab.Map.route) {
-                            popUpTo(Tab.Map.route) { saveState = true }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
-                    },
+                    onShowOnMap = { goToTab(Tab.Map) },
                 )
             }
             composable(Tab.Rides.route) {
-                RidesScreen(vm, onOpenRide = { id -> nav.navigate("ride/$id") })
+                RidesScreen(
+                    vm,
+                    onOpenRide = { id -> nav.navigate("ride/$id") },
+                    onBrowseTrails = { goToTab(Tab.List) },
+                )
             }
             composable("ride/{id}") { entry ->
                 val id = entry.arguments?.getString("id").orEmpty()
-                RideDetailScreen(vm, id, onBack = { nav.popBackStack() }, onOpenTrail = { tid -> nav.navigate("detail/$tid") })
+                RideDetailScreen(
+                    vm, id,
+                    onBack = { nav.popBackStack() },
+                    onOpenTrail = { tid -> nav.navigate("detail/$tid") },
+                    onShowOnMap = { goToTab(Tab.Map) },
+                )
             }
             composable("offline") {
                 OfflineScreen(
@@ -163,13 +167,7 @@ private fun TrailmapRoot(vm: TrailsViewModel) {
                 TrailDetailScreen(
                     vm, id,
                     onBack = { nav.popBackStack() },
-                    onShowOnMap = {
-                        nav.navigate(Tab.Map.route) {
-                            popUpTo(Tab.Map.route) { saveState = true }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
-                    },
+                    onShowOnMap = { goToTab(Tab.Map) },
                 )
             }
         }

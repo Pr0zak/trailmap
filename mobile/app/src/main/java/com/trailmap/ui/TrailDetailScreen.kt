@@ -259,85 +259,13 @@ internal fun TrailDetailContent(
     }
 
     if (showAddToRide && trail != null) {
-        var showNewRide by remember { mutableStateOf(false) }
-        if (showNewRide) {
-            NewRideDialog(
-                onDismiss = {
-                    showNewRide = false
-                    showAddToRide = false
-                },
-                onCreate = { name ->
-                    onCreateRide(name, trail)
-                    showNewRide = false
-                    showAddToRide = false
-                    Toast.makeText(context, "Added to $name", Toast.LENGTH_SHORT).show()
-                },
-            )
-        } else {
-            AlertDialog(
-                onDismissRequest = { showAddToRide = false },
-                title = { Text("Add to ride") },
-                text = {
-                    LazyColumn(Modifier.heightIn(max = 320.dp)) {
-                        item(key = "new") {
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clickable { showNewRide = true }
-                                    .padding(vertical = 14.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.PlaylistAdd,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                )
-                                Spacer(Modifier.size(12.dp))
-                                Text(
-                                    "New ride…",
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.primary,
-                                )
-                            }
-                        }
-                        items(ui.rides, key = { it.id }) { ride ->
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        onAddToRide(ride.id, trail)
-                                        showAddToRide = false
-                                        Toast.makeText(
-                                            context,
-                                            "Added to ${ride.name}",
-                                            Toast.LENGTH_SHORT,
-                                        ).show()
-                                    }
-                                    .padding(vertical = 14.dp),
-                            ) {
-                                Column {
-                                    Text(
-                                        ride.name,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.SemiBold,
-                                    )
-                                    Text(
-                                        "${ride.trails.size} trails",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                },
-                confirmButton = {},
-                dismissButton = {
-                    TextButton(onClick = { showAddToRide = false }) { Text("Close") }
-                },
-            )
-        }
+        AddToRideDialog(
+            rides = ui.rides,
+            trail = trail,
+            onDismiss = { showAddToRide = false },
+            onCreateRide = onCreateRide,
+            onAddToRide = onAddToRide,
+        )
     }
 }
 

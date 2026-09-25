@@ -20,6 +20,10 @@ data class RideTrail(
     val lengthMeters: Double,
     val surface: String,        // SurfaceType.name
     val mtbScale: Int? = null,
+    // Where the trail is, so "Show ride on map" can go there. Null on rides saved before
+    // this was recorded; those still highlight once their trails are loaded.
+    val lat: Double? = null,
+    val lon: Double? = null,
 )
 
 /** A user-built ride: a named set of trails whose lengths sum into a total. */

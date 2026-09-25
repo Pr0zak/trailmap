@@ -51,6 +51,7 @@ class ScreenSnapshots {
     @Test fun map_loading() = shot { Map(Samples.ui.copy(loading = true)) }
     @Test fun map_selected() = shot { Map(Samples.ui, selected = "name_trolley_track_trail") }
     @Test fun map_mtb() = shot { Map(Samples.uiMtb) }
+    @Test fun map_ride() = shot { Map(Samples.ui.copy(highlightedRideId = "r1")) }
     @Test fun map_dark() = shot(dark = true) { Map(Samples.ui, dark = true) }
 
     @Test fun filter_sheet() = shot {

@@ -32,6 +32,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.DropdownMenu
@@ -158,10 +162,14 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
     }
 
     // Highlight the selected trail (or clear the highlight when nothing is selected).
-    LaunchedEffect(ui.selectedTrailId, ui.trailsVersion, styleRef.value) {
+    // A highlighted ride lights up all of its trails that are loaded.
+    LaunchedEffect(ui.selectedTrailId, ui.highlightedRideId, ui.rides, ui.trailsVersion, styleRef.value) {
         val style = styleRef.value ?: return@LaunchedEffect
-        val selected = ui.selectedTrailId?.let { vm.trailById(it) }
-        val fc = if (selected != null) trailsFc(listOf(selected)) else EMPTY_FC
+        val rideIds = ui.highlightedRideId
+            ?.let { rid -> ui.rides.firstOrNull { it.id == rid } }
+            ?.trails?.map { it.id }?.toSet().orEmpty()
+        val lit = ui.trails.filter { it.id == ui.selectedTrailId || it.id in rideIds }
+        val fc = if (lit.isNotEmpty()) trailsFc(lit) else EMPTY_FC
         style.getSourceAs<GeoJsonSource>(SRC_HIGHLIGHT)?.setGeoJson(fc)
     }
 
@@ -254,6 +262,10 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
             onSetTheme = vm::setMapTheme,
             onOpenOffline = onOpenOffline,
             onRecenter = vm::recenterOnMe,
+            onToggleSaved = vm::toggleSaved,
+            onCreateRide = { name, t -> vm.createRide(name, seed = t) },
+            onAddToRide = { rideId, t -> vm.addTrailToRide(rideId, t) },
+            onClearRide = vm::clearRideHighlight,
         )
     }
 }
@@ -274,7 +286,12 @@ internal fun BoxScope.MapOverlays(
     onSetTheme: (MapTheme) -> Unit,
     onOpenOffline: () -> Unit,
     onRecenter: () -> Unit,
+    onToggleSaved: (String) -> Unit = {},
+    onCreateRide: (String, Trail) -> Unit = { _, _ -> },
+    onAddToRide: (String, Trail) -> Unit = { _, _ -> },
+    onClearRide: () -> Unit = {},
 ) {
+    var showAddToRide by remember { mutableStateOf(false) }
         var showFilters by remember { mutableStateOf(false) }
         if (showFilters) FilterSheet(ui, filters, onDismiss = { showFilters = false })
 
@@ -315,6 +332,29 @@ internal fun BoxScope.MapOverlays(
                 )
             }
 
+            // "Show ride on map" banner: which ride is highlighted, and how many of its
+            // trails are loaded yet (the rest arrive as the map loads that area).
+            ui.highlightedRideId?.let { rid -> ui.rides.firstOrNull { it.id == rid } }?.let { ride ->
+                val shown = ride.trails.count { t -> ui.trails.any { it.id == t.id } }
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shadowElevation = 2.dp,
+                ) {
+                    Row(Modifier.padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (shown < ride.trails.size) "${ride.name} · $shown of ${ride.trails.size} trails loaded"
+                            else "${ride.name} · %.1f mi".format(ride.totalMiles),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                        IconButton(onClick = onClearRide) {
+                            Icon(Icons.Filled.Close, contentDescription = "Stop showing ride")
+                        }
+                    }
+                }
+            }
+
             val notice = ui.error
                 ?: "Offline — showing saved trails".takeIf { ui.servingStale && !ui.loading }
             notice?.let { msg ->
@@ -332,86 +372,106 @@ internal fun BoxScope.MapOverlays(
             }
         }
 
-        // bottom peek card — only for the trail the user tapped (nothing auto-selected at startup)
-        if (selectedTrail != null) {
-            NearestTrailCard(
+        // Bottom: legend and buttons in a row, the peek card under them, all in one column —
+        // so the card pushes the controls up by its real height instead of a guessed offset.
+        // The column's bottom padding clears the MapLibre attribution.
+        Column(
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(bottom = 36.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 8.dp, end = 16.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                // color key — difficulty (MTB) or surface (ALL)
+                MapLegend(mode = ui.mode, dark = dark)
+                Spacer(Modifier.weight(1f))
+                MapButtons(ui, onSetTheme, onOpenOffline, onRecenter)
+            }
+            // peek card — only for the trail the user tapped (nothing auto-selected at startup)
+            if (selectedTrail != null) {
+                TrailPeekCard(
+                    trail = selectedTrail,
+                    saved = ui.isSaved(selectedTrail.id),
+                    onDetails = { onOpenTrail(selectedTrail.id) },
+                    onToggleSaved = { onToggleSaved(selectedTrail.id) },
+                    onAddToRide = { showAddToRide = true },
+                    onClose = onClearSelection,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                )
+            }
+        }
+        if (showAddToRide && selectedTrail != null) {
+            AddToRideDialog(
+                rides = ui.rides,
                 trail = selectedTrail,
-                onDetails = { onOpenTrail(selectedTrail.id) },
-                onClose = onClearSelection,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .padding(start = 12.dp, end = 12.dp, bottom = 40.dp), // clears the MapLibre attribution
+                onDismiss = { showAddToRide = false },
+                onCreateRide = onCreateRide,
+                onAddToRide = onAddToRide,
             )
         }
+    }
 
-        // color key — difficulty (MTB) or surface (ALL)
-        MapLegend(
-            mode = ui.mode,
-            dark = dark,
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                // Above the MapLibre attribution, and above the peek card when one is up.
-                .padding(start = 8.dp, bottom = if (selectedTrail != null) 160.dp else 40.dp),
-        )
-
-        // right-edge controls: theme menu, offline download, my-location.
-        // Lift them above the peek card when one is showing so nothing overlaps.
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = if (selectedTrail != null) 160.dp else 28.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            // Theme lives behind a Layers button: it's changed rarely, and the old three-state
-            // A / sun / moon icon didn't say what it did.
-            Box {
-                var layersOpen by remember { mutableStateOf(false) }
-                SmallFloatingActionButton(
-                    onClick = { layersOpen = true },
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-                ) {
-                    Icon(Icons.Filled.Layers, contentDescription = "Theme")
-                }
-                DropdownMenu(expanded = layersOpen, onDismissRequest = { layersOpen = false }) {
-                    Text(
-                        "Theme",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    )
-                    listOf(
-                        MapTheme.SYSTEM to "Match system",
-                        MapTheme.LIGHT to "Light",
-                        MapTheme.DARK to "Dark",
-                    ).forEach { (theme, label) ->
-                        DropdownMenuItem(
-                            text = { Text(label) },
-                            leadingIcon = {
-                                RadioButton(selected = ui.mapTheme == theme, onClick = null)
-                            },
-                            onClick = {
-                                onSetTheme(theme)
-                                layersOpen = false
-                            },
-                        )
-                    }
-                }
-            }
+/** Right-edge controls: theme menu, offline download, my-location. */
+@Composable
+private fun MapButtons(
+    ui: TrailsUiState,
+    onSetTheme: (MapTheme) -> Unit,
+    onOpenOffline: () -> Unit,
+    onRecenter: () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        // Theme lives behind a Layers button: it's changed rarely, and the old three-state
+        // A / sun / moon icon didn't say what it did.
+        Box {
+            var layersOpen by remember { mutableStateOf(false) }
             SmallFloatingActionButton(
-                onClick = onOpenOffline,
+                onClick = { layersOpen = true },
                 containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
             ) {
-                Icon(Icons.Filled.CloudDownload, contentDescription = "Offline areas")
+                Icon(Icons.Filled.Layers, contentDescription = "Theme")
             }
-            FloatingActionButton(
-                onClick = onRecenter,
-                containerColor = MaterialTheme.colorScheme.primary,
-            ) {
-                Icon(Icons.Filled.MyLocation, contentDescription = "My location")
+            DropdownMenu(expanded = layersOpen, onDismissRequest = { layersOpen = false }) {
+                Text(
+                    "Theme",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+                listOf(
+                    MapTheme.SYSTEM to "Match system",
+                    MapTheme.LIGHT to "Light",
+                    MapTheme.DARK to "Dark",
+                ).forEach { (theme, label) ->
+                    DropdownMenuItem(
+                        text = { Text(label) },
+                        leadingIcon = {
+                            RadioButton(selected = ui.mapTheme == theme, onClick = null)
+                        },
+                        onClick = {
+                            onSetTheme(theme)
+                            layersOpen = false
+                        },
+                    )
+                }
             }
         }
+        SmallFloatingActionButton(
+            onClick = onOpenOffline,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+        ) {
+            Icon(Icons.Filled.CloudDownload, contentDescription = "Offline areas")
+        }
+        FloatingActionButton(
+            onClick = onRecenter,
+            containerColor = MaterialTheme.colorScheme.primary,
+        ) {
+            Icon(Icons.Filled.MyLocation, contentDescription = "My location")
+        }
+    }
 }
 
 /** "1 trail" / "12 trails". */
@@ -500,51 +560,75 @@ private val SURFACE_LINE_COLORS = listOf(
     "Dirt" to (0xFFA0522D to 0xFFCC7A4D),
 )
 
+/**
+ * The card for a tapped trail: stats, plus Save and Add to ride so the common actions don't
+ * need a trip through the detail screen.
+ */
 @Composable
-private fun NearestTrailCard(
+private fun TrailPeekCard(
     trail: Trail,
+    saved: Boolean,
     onDetails: () -> Unit,
+    onToggleSaved: () -> Unit,
+    onAddToRide: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier,
 ) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-        tonalElevation = 3.dp,
-        shadowElevation = 6.dp,
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        shadowElevation = 8.dp,
     ) {
-        Row(
-            Modifier.padding(start = 16.dp, top = 8.dp, bottom = 12.dp, end = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
+        Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     trail.name,
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
-                Spacer(Modifier.size(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    SurfaceBadge(trail.surface)
-                    MtbBadge(trail.mtbScale, Modifier.padding(start = 6.dp))
-                    Spacer(Modifier.size(8.dp))
-                    Text(
-                        "%.1f mi · %.1f mi away".format(trail.lengthMiles, trail.distanceMiles),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                IconButton(onClick = onToggleSaved) {
+                    Icon(
+                        if (saved) Icons.Filled.Star else Icons.Filled.StarBorder,
+                        contentDescription = if (saved) "Remove from saved" else "Save trail",
+                        tint = if (saved) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                IconButton(onClick = onClose) {
+                    Icon(Icons.Filled.Close, contentDescription = "Dismiss")
+                }
             }
-            Spacer(Modifier.size(8.dp))
-            Button(onClick = onDetails) { Text("Details") }
-            IconButton(onClick = onClose) {
-                Icon(Icons.Filled.Close, contentDescription = "Dismiss")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SurfaceBadge(trail.surface)
+                MtbBadge(trail.mtbScale, Modifier.padding(start = 6.dp))
+                Spacer(Modifier.size(8.dp))
+                UseIcons(trail.uses, size = 16)
+            }
+            Spacer(Modifier.size(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                PeekStat("%.1f mi".format(trail.lengthMiles), "length")
+                PeekStat("%.1f mi".format(trail.distanceMiles), "away")
+            }
+            Spacer(Modifier.size(12.dp))
+            Row(Modifier.padding(end = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onDetails, modifier = Modifier.weight(1f)) { Text("Details") }
+                OutlinedButton(onClick = onAddToRide, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null, Modifier.size(18.dp))
+                    Spacer(Modifier.size(6.dp))
+                    Text("Add to ride")
+                }
             }
         }
     }
+}
+
+@Composable
+private fun PeekStat(value: String, label: String) = Column {
+    Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+    Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 /** Add the highlight glow + casing + colored line layers (bottom→top order). */

@@ -71,6 +71,8 @@ data class TrailsUiState(
     val focusTarget: CameraTarget? = null,
     /** The trail the user tapped on the map (peek card + highlight); null = nothing selected. */
     val selectedTrailId: String? = null,
+    /** A ride whose trails are all highlighted on the map ("Show ride on map"). */
+    val highlightedRideId: String? = null,
     /** User-built rides (named trail collections with summed length). */
     val rides: List<Ride> = emptyList(),
     /** Last map viewport, for "download the current view" offline. */
@@ -867,8 +869,40 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun deleteRide(rideId: String) = persistRides(_state.value.rides.filterNot { it.id == rideId })
 
-    private fun Trail.toRideTrail() =
-        RideTrail(id = id, name = name, lengthMeters = lengthMeters, surface = surface.name, mtbScale = mtbScale)
+    private fun Trail.toRideTrail() = RideTrail(
+        id = id, name = name, lengthMeters = lengthMeters, surface = surface.name, mtbScale = mtbScale,
+        lat = center.lat, lon = center.lon,
+    )
+
+    /** Move a ride's trail from one position to another (drag to reorder). */
+    fun moveTrailInRide(rideId: String, from: Int, to: Int) = persistRides(
+        _state.value.rides.map { r ->
+            if (r.id != rideId || from !in r.trails.indices || to !in r.trails.indices) r
+            else r.copy(trails = r.trails.toMutableList().apply { add(to, removeAt(from)) })
+        },
+    )
+
+    /**
+     * Highlight every trail in a ride and frame them. The camera goes to the middle of the
+     * trails' recorded centres at a zoom that fits them; pan-loading then pulls the trails in
+     * and the highlight picks them up as they arrive.
+     */
+    fun showRideOnMap(rideId: String) {
+        val ride = rideById(rideId) ?: return
+        val pts = ride.trails.mapNotNull { t -> t.lat?.let { lat -> t.lon?.let { GeoPoint(lat, it) } } }
+            .ifEmpty { _state.value.trails.filter { t -> ride.trails.any { it.id == t.id } }.map { it.center } }
+        val target = if (pts.isEmpty()) null else {
+            val n = pts.maxOf { it.lat }; val s = pts.minOf { it.lat }
+            val e = pts.maxOf { it.lon }; val w = pts.minOf { it.lon }
+            // A phone screen shows about 1.6 tiles across; leave a 50% margin around the span.
+            val span = maxOf(n - s, (e - w) * kotlin.math.cos(Math.toRadians((n + s) / 2)), 0.005)
+            val zoom = (kotlin.math.ln(1.6 * 360.0 / (span * 1.5)) / kotlin.math.ln(2.0)).coerceIn(10.0, 15.0)
+            CameraTarget(GeoPoint((n + s) / 2, (e + w) / 2), zoom)
+        }
+        _state.update { it.copy(highlightedRideId = rideId, selectedTrailId = null, focusTarget = target ?: it.focusTarget) }
+    }
+
+    fun clearRideHighlight() = _state.update { it.copy(highlightedRideId = null) }
 
     /** Minimum-length filter in miles (0 = any). */
     fun setMinLength(miles: Double) = _state.update { it.copy(minLengthMiles = miles) }
