@@ -1,27 +1,26 @@
 <!--
-  Launcher icon foreground: a map pin with a switchback trail cut out of it. The cut-out is
-  drawn in the background gold rather than punched through, so it reads the same on every
-  launcher. All artwork sits inside the 66dp adaptive-icon safe zone (centre 54,54, r 33).
+  Themed-icon layer (Android 13+): one colour, tinted by the system. A vector can't punch the
+  switchback out of a filled pin, so this is the line-drawn version of the same mark.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- pin -->
     <path
-        android:fillColor="#173826"
+        android:strokeColor="#000000"
+        android:strokeWidth="5"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000"
         android:pathData="M54,22 C39.6,22 29,32.6 29,46 C29,62 54,86 54,86 C54,86 79,62 79,46 C79,32.6 68.4,22 54,22 Z" />
-    <!-- switchback trail -->
     <path
-        android:strokeColor="#F2C744"
+        android:strokeColor="#000000"
         android:strokeWidth="4.6"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
         android:fillColor="#00000000"
         android:pathData="M45,61 L62,55 L45,48 L62,41" />
-    <!-- trailhead -->
     <path
-        android:fillColor="#F2C744"
+        android:fillColor="#000000"
         android:pathData="M45,61 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0" />
 </vector>

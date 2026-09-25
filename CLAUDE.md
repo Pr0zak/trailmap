@@ -66,6 +66,7 @@ ui/
   ElevationChart.kt   mile axis, gridlines, touch/drag scrub
   theme/  "Trailhead" palette. Surface colors: green=paved, GOLD(#DAA520)=gravel, SIENNA(#A0522D)=dirt (gold vs sienna chosen to be clearly distinct; gravel/brown were too similar)
 MainActivity.kt       bottom-nav (Map / Trails) + detail route. NOTE: trail ids use `_` separators (name_<slug>, way_<id>, rel_<id>) — NOT `/`, which breaks the `detail/{id}` nav route.
+res/drawable/ic_launcher_{foreground,monochrome}.xml + mipmap-anydpi-v26/ic_launcher.xml   app icon: dark switchback pin on gold (#F2C744, values/colors.xml), plus a line-drawn themed-icon layer. IconSnapshot renders the real layers.
 assets/osm_raster_style.json   keyless OSM raster (light)   |   assets/carto_dark_style.json  CARTO dark raster (dark mode)
 design/mockups/       Stitch "Trailhead" mockups (map/filters/list/detail .png + .html)
 ```
