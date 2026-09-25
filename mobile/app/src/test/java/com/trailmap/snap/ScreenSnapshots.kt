@@ -72,7 +72,7 @@ class ScreenSnapshots {
 
     @Composable
     private fun List(ui: TrailsUiState) = TrailListContent(
-        ui = ui, filters = FilterActions(), onSetShowSavedOnly = {},
+        ui = ui, filters = FilterActions(), onSetShowSavedOnly = {}, onSetSort = {},
         onToggleSaved = {}, onOpenTrail = {}, onOpenSystem = {},
     )
 
@@ -85,6 +85,7 @@ class ScreenSnapshots {
         TrailDetailContent(
             trail = Samples.trails[0], profile = Samples.profile, ui = Samples.ui,
             onBack = {}, onToggleSaved = {}, onCreateRide = { _, _ -> }, onAddToRide = { _, _ -> },
+            chartScrub = 0.42f,
         )
     }
 

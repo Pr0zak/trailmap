@@ -35,6 +35,9 @@ import kotlinx.coroutines.withTimeoutOrNull
 /** Map data mode: all trails (paved/gravel/dirt) vs mountain-bike trails only. */
 enum class MapMode { ALL, MTB }
 
+/** Trails list order. The map ignores it; `filtered` itself is always nearest-first. */
+enum class TrailSort(val label: String) { DISTANCE("Distance"), LENGTH("Length"), NAME("Name") }
+
 /** Basemap theme: follow the system, or force light/dark independent of it. */
 enum class MapTheme { SYSTEM, LIGHT, DARK }
 
@@ -62,6 +65,7 @@ data class TrailsUiState(
     val query: String = "",
     val savedIds: Set<String> = emptySet(),
     val showSavedOnly: Boolean = false,
+    val sort: TrailSort = TrailSort.DISTANCE,
     val mapTheme: MapTheme = MapTheme.SYSTEM,
     /** When set, the map recenters here (e.g. tapping a trail-system header); consume after use. */
     val focusTarget: CameraTarget? = null,
@@ -118,7 +122,22 @@ data class TrailsUiState(
      * a wider cached circle means panning inside it needs no refetch — but the Trails list
      * has to keep the chip honest and not pad itself with the next town over.
      */
-    val listed: List<Trail> by lazy { filtered.filter { it.distanceMeters <= radiusMeters } }
+    val listed: List<Trail> by lazy {
+        val near = filtered.filter { it.distanceMeters <= radiusMeters }
+        when (sort) {
+            TrailSort.DISTANCE -> near
+            TrailSort.LENGTH -> near.sortedByDescending { it.lengthMeters }
+            TrailSort.NAME -> near.sortedBy { it.name.lowercase() }
+        }
+    }
+
+    /**
+     * Named trails within the radius chip before any filter, search or saved-only toggle —
+     * what the empty state counts when it says the filters are hiding everything.
+     */
+    val unfilteredNearbyCount: Int by lazy {
+        trails.count { it.name != "Unnamed path" && it.distanceMeters <= radiusMeters }
+    }
 
     /**
      * In MTB mode, [listed] grouped into nearby trail systems; empty otherwise.
@@ -863,6 +882,8 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         prefs.setSavedIds(next)
         it.copy(savedIds = next)
     }
+
+    fun setSort(sort: TrailSort) = _state.update { it.copy(sort = sort) }
 
     /** Show only saved trails (used by the Trails list "saved" toggle). */
     fun setShowSavedOnly(on: Boolean) = _state.update { it.copy(showSavedOnly = on) }

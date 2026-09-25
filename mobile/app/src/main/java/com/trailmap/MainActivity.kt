@@ -160,7 +160,17 @@ private fun TrailmapRoot(vm: TrailsViewModel) {
             }
             composable("detail/{id}") { entry ->
                 val id = entry.arguments?.getString("id").orEmpty()
-                TrailDetailScreen(vm, id, onBack = { nav.popBackStack() })
+                TrailDetailScreen(
+                    vm, id,
+                    onBack = { nav.popBackStack() },
+                    onShowOnMap = {
+                        nav.navigate(Tab.Map.route) {
+                            popUpTo(Tab.Map.route) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
+                )
             }
         }
     }

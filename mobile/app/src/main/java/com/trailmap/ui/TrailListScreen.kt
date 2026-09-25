@@ -1,6 +1,22 @@
 package com.trailmap.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.SearchOff
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -64,6 +80,7 @@ fun TrailListScreen(
         ui = ui,
         filters = FilterActions.of(vm),
         onSetShowSavedOnly = vm::setShowSavedOnly,
+        onSetSort = vm::setSort,
         onToggleSaved = vm::toggleSaved,
         onOpenTrail = onOpenTrail,
         onOpenSystem = { system ->
@@ -80,6 +97,7 @@ internal fun TrailListContent(
     ui: TrailsUiState,
     filters: FilterActions,
     onSetShowSavedOnly: (Boolean) -> Unit,
+    onSetSort: (TrailSort) -> Unit,
     onToggleSaved: (String) -> Unit,
     onOpenTrail: (String) -> Unit,
     onOpenSystem: (TrailSystem) -> Unit,
@@ -134,23 +152,22 @@ internal fun TrailListContent(
                     .padding(horizontal = 12.dp, vertical = 6.dp),
             )
 
+            SortChip(ui.sort, onSetSort, Modifier.padding(horizontal = 12.dp))
+
             when {
                 ui.loading && trails.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
                     CircularProgressIndicator()
                 }
-                trails.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Text(
-                        ui.error
-                            ?: if (ui.showSavedOnly) "No saved trails yet." else "No trails match your filters.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(24.dp),
-                    )
-                }
-                ui.mode == MapMode.MTB -> LazyColumn(
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
+                trails.isEmpty() -> EmptyTrails(
+                    ui = ui,
+                    onClearFilters = {
+                        filters.reset()
+                        filters.setQuery("")
+                        onSetShowSavedOnly(false)
+                    },
+                    onWiden = { filters.setRadiusMiles(it) },
+                )
+                ui.mode == MapMode.MTB -> LazyColumn {
                     ui.systems.forEach { system ->
                         item(key = "hdr_${system.id}") {
                             SystemHeader(system) { onOpenSystem(system) }
@@ -165,10 +182,7 @@ internal fun TrailListContent(
                         }
                     }
                 }
-                else -> LazyColumn(
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
+                else -> LazyColumn {
                     items(trails, key = { it.id }) { trail ->
                         TrailRow(
                             trail = trail,
@@ -183,46 +197,111 @@ internal fun TrailListContent(
     }
 }
 
-/** Header card for a clustered trail system in MTB mode. Tapping it recenters the map there. */
+/** "Sort: Distance ▾" with a menu of the three orders. */
 @Composable
-internal fun SystemHeader(system: TrailSystem, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+private fun SortChip(sort: TrailSort, onSetSort: (TrailSort) -> Unit, modifier: Modifier = Modifier) {
+    Box(modifier) {
+        var open by remember { mutableStateOf(false) }
+        AssistChip(
+            onClick = { open = true },
+            label = { Text("Sort: ${sort.label}") },
+            trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null, Modifier.size(18.dp)) },
+        )
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            TrailSort.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.label) },
+                    leadingIcon = { RadioButton(selected = option == sort, onClick = null) },
+                    onClick = {
+                        onSetSort(option)
+                        open = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Nothing to list: say why, and offer the fix — clear the filters when they're what's hiding
+ * trails, or look further out when there's simply nothing this close.
+ */
+@Composable
+private fun EmptyTrails(ui: TrailsUiState, onClearFilters: () -> Unit, onWiden: (Int) -> Unit) {
+    val hidden = ui.unfilteredNearbyCount
+    val filtering = activeFilterCount(ui) > 0 || ui.query.isNotBlank() || ui.showSavedOnly
+    val radius = ui.radiusMiles.roundToInt()
+    val wider = radiusOptions(ui.mode).firstOrNull { it > radius }
+    Column(
+        Modifier.fillMaxSize().padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
     ) {
         Icon(
-            Icons.Filled.Forest,
+            if (ui.error != null) Icons.Filled.CloudOff else Icons.Filled.SearchOff,
             contentDescription = null,
+            Modifier.size(48.dp),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(22.dp),
         )
-        Spacer(Modifier.size(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                system.name,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                "${system.trails.size} trails · %.1f mi · View on map".format(system.totalMiles),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        Spacer(Modifier.size(12.dp))
+        Text(
+            when {
+                ui.error != null -> "Couldn't load trails"
+                ui.showSavedOnly && ui.savedIds.isEmpty() -> "No saved trails yet"
+                else -> "No trails match"
+            },
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            when {
+                ui.error != null -> ui.error
+                ui.showSavedOnly && ui.savedIds.isEmpty() -> "Tap the star on a trail to keep it here."
+                filtering && hidden > 0 -> {
+                    val what = when {
+                        ui.showSavedOnly -> "Showing saved only hides"
+                        ui.query.isNotBlank() && activeFilterCount(ui) == 0 -> "Your search hides"
+                        ui.query.isNotBlank() -> "Your search and filters hide"
+                        else -> "Your filters hide"
+                    }
+                    "$what all $hidden ${if (hidden == 1) "trail" else "trails"} within $radius mi."
+                }
+                else -> "There are no named trails within $radius mi."
+            },
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.size(16.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (filtering) Button(onClick = onClearFilters) { Text(if (ui.query.isNotBlank()) "Clear search & filters" else "Clear filters") }
+            if (wider != null && ui.error == null) {
+                OutlinedButton(onClick = { onWiden(wider) }) { Text("Search $wider mi") }
+            }
         }
-        ScaleRangeChip(system.scaleMin, system.scaleMax)
-        Spacer(Modifier.size(8.dp))
-        Icon(
-            Icons.Filled.Map,
-            contentDescription = "View on map",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp),
-        )
+    }
+}
+
+/** Header for a clustered trail system in MTB mode: a tinted band, with Map to recenter there. */
+@Composable
+internal fun SystemHeader(system: TrailSystem, onClick: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Filled.Forest, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.size(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(system.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Text(
+                    "${system.trails.size} ${if (system.trails.size == 1) "trail" else "trails"} · %.1f mi".format(system.totalMiles),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            ScaleRangeChip(system.scaleMin, system.scaleMax)
+            TextButton(onClick = onClick) { Text("Map") }
+        }
     }
 }
 
@@ -247,6 +326,10 @@ internal fun ScaleRangeChip(scaleMin: Int?, scaleMax: Int?) {
     }
 }
 
+/**
+ * One trail: a surface-colored edge, the name, one meta line and the save star. Flat, with a
+ * divider — about 40% shorter than the card it replaced, so more of the list fits on screen.
+ */
 @Composable
 internal fun TrailRow(
     trail: Trail,
@@ -254,36 +337,34 @@ internal fun TrailRow(
     onToggleSave: () -> Unit,
     onClick: () -> Unit,
 ) {
-    Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
+    Column(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Row(
-            Modifier.fillMaxWidth().padding(start = 16.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+            Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+            Box(Modifier.width(4.dp).height(44.dp).clip(RoundedCornerShape(50)).background(trail.surface.color))
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
                 Text(
                     trail.name,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
-                Spacer(Modifier.size(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    SurfaceBadge(trail.surface)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "${trail.surface.label} · %.1f mi · %.1f mi away".format(trail.lengthMiles, trail.distanceMiles),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    UseIcons(trail.uses, tint = MaterialTheme.colorScheme.onSurfaceVariant, size = 16)
+                }
+                if (trail.mtbScale != null) {
+                    Spacer(Modifier.height(4.dp))
                     MtbBadge(trail.mtbScale)
                 }
-            }
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    "%.1f mi".format(trail.lengthMiles),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    "%.1f mi away".format(trail.distanceMiles),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.size(4.dp))
-                UseIcons(trail.uses)
             }
             IconButton(onClick = onToggleSave) {
                 Icon(
@@ -297,6 +378,7 @@ internal fun TrailRow(
                 )
             }
         }
+        HorizontalDivider(Modifier.padding(start = 28.dp))
     }
 }
 
@@ -338,23 +420,18 @@ fun MtbBadge(scale: Int?, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun UseIcons(uses: Set<UseType>, modifier: Modifier = Modifier) {
+fun UseIcons(
+    uses: Set<UseType>,
+    modifier: Modifier = Modifier,
+    tint: Color = MaterialTheme.colorScheme.primary,
+    size: Int = 18,
+) {
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         if (UseType.WALK in uses) {
-            Icon(
-                Icons.Filled.DirectionsWalk,
-                contentDescription = "Walking",
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(18.dp),
-            )
+            Icon(Icons.Filled.DirectionsWalk, contentDescription = "Walking", tint = tint, modifier = Modifier.size(size.dp))
         }
         if (UseType.BIKE in uses) {
-            Icon(
-                Icons.Filled.DirectionsBike,
-                contentDescription = "Biking",
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(18.dp),
-            )
+            Icon(Icons.Filled.DirectionsBike, contentDescription = "Biking", tint = tint, modifier = Modifier.size(size.dp))
         }
     }
 }
