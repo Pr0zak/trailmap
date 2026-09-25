@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BrightnessAuto
@@ -299,7 +300,8 @@ internal fun BoxScope.MapOverlays(
         // strip follows the bar's real height. It used to sit at a fixed 108 dp, which put
         // the loading pill on top of the old chip rows.
         Column(
-            modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(8.dp),
+            // The map runs under the status bar; only the controls step down below it.
+            modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().statusBarsPadding().padding(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {

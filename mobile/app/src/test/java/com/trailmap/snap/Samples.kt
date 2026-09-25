@@ -83,7 +83,8 @@ object Samples {
     val profile: ElevationProfile = run {
         val pts = (0..60).map { i ->
             val d = i * trails[0].lengthMeters / 60.0
-            ElevPoint(d, 270.0 + 18 * sin(i / 7.0) + 9 * sin(i / 2.3) + i * 0.35)
+            val path = trails[0].paths[0]
+            ElevPoint(d, 270.0 + 18 * sin(i / 7.0) + 9 * sin(i / 2.3) + i * 0.35, path[i * (path.size - 1) / 60])
         }
         ElevationProfile(pts, ascentMeters = 64.0, descentMeters = 43.0, minMeters = pts.minOf { it.elevationMeters }, maxMeters = pts.maxOf { it.elevationMeters })
     }

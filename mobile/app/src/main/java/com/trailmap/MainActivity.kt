@@ -37,6 +37,8 @@ import com.trailmap.data.DiagLog
 import com.trailmap.update.UpdateChecker
 import com.trailmap.update.UpdateInfo
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -61,10 +63,13 @@ class MainActivity : ComponentActivity() {
         DiagLog.log("app", "activity created (restored=${savedInstanceState != null})")
         setContent {
             val vm: TrailsViewModel = viewModel()
-            val ui by vm.state.collectAsStateWithLifecycle()
+            // Only the theme is read here. Collecting the whole state at the root would
+            // recompose the app shell on every state change (each camera idle, each load step).
+            val mapTheme by remember(vm) { vm.state.map { it.mapTheme }.distinctUntilChanged() }
+                .collectAsStateWithLifecycle(vm.state.value.mapTheme)
             // The theme choice on the map's Layers menu applies to the whole app, so a forced
             // dark map doesn't sit under light cards and bars.
-            val dark = when (ui.mapTheme) {
+            val dark = when (mapTheme) {
                 MapTheme.SYSTEM -> isSystemInDarkTheme()
                 MapTheme.LIGHT -> false
                 MapTheme.DARK -> true
@@ -86,6 +91,14 @@ private fun TrailmapRoot(vm: TrailsViewModel) {
     val tabs = listOf(Tab.Map, Tab.List, Tab.Rides)
     val backStack by nav.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route
+
+    // Jump to the map from a detail screen. Popping back to it — rather than navigating with
+    // restoreState — matters: the Map tab's saved state is the stack that led here, so
+    // navigating "to" it re-opened the very screen the user had just left, and View on map
+    // appeared to do nothing.
+    fun showMap() {
+        if (!nav.popBackStack(Tab.Map.route, inclusive = false)) nav.navigate(Tab.Map.route)
+    }
 
     // Switch to a top-level tab the way the bottom bar does, keeping each tab's state.
     fun goToTab(tab: Tab) = nav.navigate(tab.route) {
@@ -121,7 +134,9 @@ private fun TrailmapRoot(vm: TrailsViewModel) {
             }
         },
     ) { padding ->
-        NavHost(nav, startDestination = Tab.Map.route, modifier = Modifier.padding(padding)) {
+        // Bottom padding only: every screen's TopAppBar already insets for the status bar, and
+        // applying the Scaffold's top padding as well left a status-bar-tall gap above each title.
+        NavHost(nav, startDestination = Tab.Map.route, modifier = Modifier.padding(bottom = padding.calculateBottomPadding())) {
             composable(Tab.Map.route) {
                 MapScreen(
                     vm,
@@ -133,7 +148,7 @@ private fun TrailmapRoot(vm: TrailsViewModel) {
                 TrailListScreen(
                     vm,
                     onOpenTrail = { id -> nav.navigate("detail/$id") },
-                    onShowOnMap = { goToTab(Tab.Map) },
+                    onShowOnMap = { showMap() },
                 )
             }
             composable(Tab.Rides.route) {
@@ -149,7 +164,7 @@ private fun TrailmapRoot(vm: TrailsViewModel) {
                     vm, id,
                     onBack = { nav.popBackStack() },
                     onOpenTrail = { tid -> nav.navigate("detail/$tid") },
-                    onShowOnMap = { goToTab(Tab.Map) },
+                    onShowOnMap = { showMap() },
                 )
             }
             composable("offline") {
@@ -167,7 +182,7 @@ private fun TrailmapRoot(vm: TrailsViewModel) {
                 TrailDetailScreen(
                     vm, id,
                     onBack = { nav.popBackStack() },
-                    onShowOnMap = { goToTab(Tab.Map) },
+                    onShowOnMap = { showMap() },
                 )
             }
         }

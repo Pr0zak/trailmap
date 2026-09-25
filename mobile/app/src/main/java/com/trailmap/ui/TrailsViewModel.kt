@@ -280,6 +280,12 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 val here = locator.current()
                 _state.update { it.copy(center = here, focusTarget = CameraTarget(here, DEFAULT_ZOOM)) }
                 load(here, initialFetchRadius())
+                // Hold camera-driven loads off until this one lands, not merely until it has
+                // started: load() only launches the job. Clearing the flag on launch let the
+                // map's first camera idle — still at its start position, before the move to
+                // the device location — supersede the startup load. A device log caught that
+                // throwing away a 0.75 s disk hit for a 19.5 s network fetch.
+                loadJob?.join()
             } finally {
                 bootstrapPending = false
             }
@@ -422,7 +428,10 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         // The chip narrows the Trails list, it no longer decides what gets downloaded. So it
         // only needs a fetch when it asks to list more than the loaded data actually covers.
         val s = _state.value
-        if (meters > s.loadedRadiusMeters) load(s.center, maxOf(meters, MIN_FETCH_RADIUS))
+        // A few hundred metres short doesn't count: 10 mi is 16,093 m against the 16,000 m an
+        // ALL-mode pull usually holds, and refetching for that 93 m cancelled whatever load
+        // was in flight to download the same area again.
+        if (meters > s.loadedRadiusMeters + RADIUS_CHIP_TOLERANCE_M) load(s.center, maxOf(meters, MIN_FETCH_RADIUS))
     }
 
     /** Radius selector in miles. Must agree exactly with the defaults, or re-selecting the
@@ -1038,6 +1047,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
 
         /** Never fetch less than this, whatever the chip says — see [fetchRadiusFor]. */
         private const val MIN_FETCH_RADIUS = 16000
+
+        /** How far past the loaded circle the radius chip may reach before it forces a fetch. */
+        private const val RADIUS_CHIP_TOLERANCE_M = 500
 
         /**
          * Ceiling on circles per offline area. Each is a few megabytes off a shared public API,

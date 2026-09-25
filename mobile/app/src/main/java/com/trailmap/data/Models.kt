@@ -233,7 +233,8 @@ private fun systemName(members: List<Trail>): String {
 }
 
 /** One sample along a trail for the elevation chart. */
-data class ElevPoint(val distanceMeters: Double, val elevationMeters: Double)
+/** One elevation sample: distance along the trail, height, and where on the trail it was taken. */
+data class ElevPoint(val distanceMeters: Double, val elevationMeters: Double, val point: GeoPoint? = null)
 
 data class ElevationProfile(
     val points: List<ElevPoint>,

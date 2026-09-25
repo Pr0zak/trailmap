@@ -113,6 +113,10 @@ internal fun TrailDetailContent(
 ) {
     val context = LocalContext.current
     var showAddToRide by remember { mutableStateOf(false) }
+    // Where the elevation chart's scrub marker is, mirrored as a dot on the route preview.
+    var scrubPoint by remember(profile) {
+        mutableStateOf(chartScrub?.let { f -> profile?.let { sampleAt(it, f)?.point } })
+    }
 
     fun openDirections(t: Trail) {
         // Route to where the trail starts, not its centroid, which can sit mid-woods.
@@ -209,7 +213,7 @@ internal fun TrailDetailContent(
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState()),
         ) {
-            RoutePreview(trail, onShowOnMap = { onShowOnMap(trail) })
+            RoutePreview(trail, marker = scrubPoint, onShowOnMap = { onShowOnMap(trail) })
 
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -251,7 +255,7 @@ internal fun TrailDetailContent(
                         profile.points.isEmpty() -> Box(Modifier.fillMaxWidth().height(160.dp), Alignment.Center) {
                             Text("Elevation unavailable", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        else -> ElevationChart(profile, initialScrub = chartScrub)
+                        else -> ElevationChart(profile, initialScrub = chartScrub, onScrub = { scrubPoint = it?.point })
                     }
                 }
             }
@@ -302,14 +306,16 @@ private fun SectionTitle(text: String) = Text(
 
 /**
  * The trail's own shape, drawn from [Trail.paths] on a plain tile — no basemap, so it costs no
- * request and works offline. Start is a filled dot, end a ringed one.
+ * request and works offline. Start is a filled dot, end a ringed one. [marker] (the elevation
+ * chart's scrub position) is drawn as a larger dot in the theme's primary color.
  */
 @Composable
-private fun RoutePreview(trail: Trail, onShowOnMap: () -> Unit) {
+private fun RoutePreview(trail: Trail, marker: GeoPoint?, onShowOnMap: () -> Unit) {
     val bg = MaterialTheme.colorScheme.surfaceContainerHigh
     val grid = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
     val lineColor = trail.surface.color
     val casing = MaterialTheme.colorScheme.surfaceContainerLowest
+    val markerColor = MaterialTheme.colorScheme.primary
     Box(Modifier.fillMaxWidth().height(190.dp).background(bg)) {
         Canvas(Modifier.fillMaxSize().padding(20.dp)) {
             val all = trail.paths.flatten()
@@ -349,6 +355,10 @@ private fun RoutePreview(trail: Trail, onShowOnMap: () -> Unit) {
             drawCircle(lineColor, 9f, pt(first.first()))
             drawCircle(lineColor, 11f, pt(last.last()))
             drawCircle(casing, 6f, pt(last.last()))
+            marker?.let {
+                drawCircle(casing, 18f, pt(it))
+                drawCircle(markerColor, 13f, pt(it))
+            }
         }
         Surface(
             onClick = onShowOnMap,

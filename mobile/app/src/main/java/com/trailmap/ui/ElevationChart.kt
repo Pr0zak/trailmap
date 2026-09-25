@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import com.trailmap.data.ElevPoint
 import com.trailmap.data.ElevationProfile
 import kotlin.math.roundToInt
 
@@ -45,7 +46,12 @@ private const val METERS_PER_MILE = 1609.344
  * [initialScrub] (0..1) pre-places the marker; used by UI snapshots.
  */
 @Composable
-fun ElevationChart(profile: ElevationProfile, modifier: Modifier = Modifier, initialScrub: Float? = null) {
+fun ElevationChart(
+    profile: ElevationProfile,
+    modifier: Modifier = Modifier,
+    initialScrub: Float? = null,
+    onScrub: (ElevPoint?) -> Unit = {},
+) {
     val pts = profile.points
     if (pts.isEmpty()) return
 
@@ -70,7 +76,13 @@ fun ElevationChart(profile: ElevationProfile, modifier: Modifier = Modifier, ini
         Row {
             BoxWithConstraints(Modifier.weight(1f).height(150.dp)) {
                 val widthPx = constraints.maxWidth.toFloat()
-                fun setFrom(x: Float) { scrub = (x / widthPx).coerceIn(0f, 1f) }
+                fun setFrom(x: Float) {
+                    val f = (x / widthPx).coerceIn(0f, 1f)
+                    scrub = f
+                    // Tell the caller which sample is under the marker, so the route preview
+                    // can show the same spot.
+                    onScrub(sampleAt(profile, f))
+                }
                 Canvas(
                     Modifier
                         .fillMaxSize()
@@ -164,4 +176,10 @@ private fun pointAt(pts: List<Pair<Double, Double>>, d: Double): Pair<Double, Do
     val (d1, e1) = pts[i]
     val t = if (d1 > d0) (d - d0) / (d1 - d0) else 0.0
     return d to (e0 + (e1 - e0) * t)
+}
+
+/** The profile sample nearest [fraction] (0..1) of the way along it. */
+fun sampleAt(profile: ElevationProfile, fraction: Float): ElevPoint? {
+    val maxDist = profile.points.maxOfOrNull { it.distanceMeters } ?: return null
+    return profile.points.minByOrNull { kotlin.math.abs(it.distanceMeters - fraction * maxDist) }
 }

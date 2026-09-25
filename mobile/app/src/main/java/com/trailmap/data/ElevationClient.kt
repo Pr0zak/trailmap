@@ -68,7 +68,7 @@ class ElevationClient {
                 val raw = elevations[i]
                 val elev = raw ?: lastElev ?: continue
                 lastElev = elev
-                pts.add(ElevPoint(cumDist, elev))
+                pts.add(ElevPoint(cumDist, elev, sampled[i]))
             }
             if (pts.isEmpty()) return ElevationProfile.EMPTY
 
