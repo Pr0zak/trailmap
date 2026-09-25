@@ -1,5 +1,8 @@
 package com.trailmap.ui
 
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.size
@@ -137,7 +140,7 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
         }
         // Tiles alone give you a basemap with no trails on it; pull the
         // trail data for the same box so the area is actually usable.
-        vm.prefetchTrailsFor(vb)
+        vm.prefetchTrailsFor(vb, n)
         status = "Starting download…"
         refresh()
     }
@@ -152,7 +155,7 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
             status = s
             refresh()
         }
-        vm.prefetchTrailsFor(preset.bounds)
+        vm.prefetchTrailsFor(preset.bounds, preset.label)
         status = "Starting ${preset.label} download…"
         refresh()
     }
@@ -183,8 +186,12 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
         },
         onDelete = { id -> areas.firstOrNull { it.region.id == id }?.let { OfflinePacks.delete(it) { refresh() } } },
         onClearTrails = { vm.clearOfflineTrails() },
-        onGetTrails = { id -> areas.firstOrNull { it.region.id == id }?.bounds?.let(vm::prefetchTrailsFor) },
-        onGetPresetTrails = { preset -> vm.prefetchTrailsFor(preset.bounds) },
+        onGetTrails = { id ->
+            areas.firstOrNull { it.region.id == id }?.let { a -> a.bounds?.let { vm.prefetchTrailsFor(it, a.name) } }
+        },
+        onGetPresetTrails = { preset -> vm.prefetchTrailsFor(preset.bounds, preset.label) },
+        onCancelTrails = vm::cancelTrailPrefetch,
+        onDismissTrailResult = vm::clearTrailPrefetch,
     )
 }
 
@@ -216,7 +223,18 @@ internal fun OfflineContent(
     presetTrails: Map<String, Pair<Int, Int>> = emptyMap(),
     onGetTrails: (Long) -> Unit = {},
     onGetPresetTrails: (PresetRegion) -> Unit = {},
+    onCancelTrails: () -> Unit = {},
+    onDismissTrailResult: () -> Unit = {},
 ) {
+    // Keep the screen on while anything downloads here. A screen lock cuts the app off from the
+    // network, and two device logs showed downloads dying mid-area exactly that way.
+    val downloading = ui.trailPrefetchProgress != null || areas.any { !it.complete }
+    val view = LocalView.current
+    DisposableEffect(downloading) {
+        view.keepScreenOn = downloading
+        onDispose { view.keepScreenOn = false }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -243,8 +261,21 @@ internal fun OfflineContent(
             item { StorageSummary(ui, areas, onClearTrails) }
 
             // Anything still downloading, with map tiles and trail data side by side.
-            items(areas.filter { !it.complete }, key = { "dl_${it.id}" }) { area ->
+            val tileDownloads = areas.filter { !it.complete }
+            items(tileDownloads, key = { "dl_${it.id}" }) { area ->
                 DownloadCard(area, ui.trailPrefetchProgress, onRetry = { onRetry(area.id) }, onDelete = { onDelete(area.id) })
+            }
+
+            // A trail download on its own — "Get trails" on an area whose tiles are done — has
+            // no tile card to ride along in, so it gets its own. It used to show nothing at all.
+            val trails = ui.trailPrefetchProgress
+            if (trails != null && tileDownloads.isEmpty()) {
+                item(key = "trails_dl") { TrailDownloadCard(ui.trailPrefetchArea ?: "This area", trails, onCancelTrails) }
+            }
+            // And its outcome stays up until dismissed, rather than a line of small print.
+            val result = ui.trailPrefetch
+            if (trails == null && result != null) {
+                item(key = "trails_result") { TrailResultCard(ui.trailPrefetchArea, result, onDismissTrailResult) }
             }
 
             item {
@@ -267,8 +298,7 @@ internal fun OfflineContent(
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                 )
-                val line = status ?: ui.trailPrefetch?.takeIf { ui.trailPrefetchProgress == null }
-                line?.let {
+                status?.let {
                     Text(
                         it,
                         style = MaterialTheme.typography.bodySmall,
@@ -409,6 +439,50 @@ private fun DownloadCard(area: OfflineAreaUi, trails: Pair<Int, Int>?, onRetry: 
                     ProgressLine("Trail data $done of $total", if (total == 0) 1f else done / total.toFloat())
                 }
             }
+        }
+    }
+}
+
+/** Progress of a trail-data download, with Cancel. */
+@Composable
+private fun TrailDownloadCard(area: String, progress: Pair<Int, Int>, onCancel: () -> Unit) {
+    val (done, total) = progress
+    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Trails for $area",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onCancel) { Text("Cancel") }
+            }
+            Column(Modifier.padding(end = 8.dp)) {
+                ProgressLine("Section $done of $total · keep this screen open", if (total == 0) 1f else done / total.toFloat())
+            }
+        }
+    }
+}
+
+/** How the last trail download ended, until dismissed. */
+@Composable
+private fun TrailResultCard(area: String?, message: String, onDismiss: () -> Unit) {
+    val trouble = message.startsWith("Paused") || message.startsWith("Couldn't") || message.startsWith("Trails partly")
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = if (trouble) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                area?.let {
+                    Text(it, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                }
+                Text(message, style = MaterialTheme.typography.bodyMedium)
+            }
+            IconButton(onClick = onDismiss) { Icon(Icons.Filled.Close, contentDescription = "Dismiss") }
         }
     }
 }

@@ -97,6 +97,8 @@ data class TrailsUiState(
     val trailPrefetch: String? = null,
     /** Sections of trail data fetched / to fetch while an offline download runs; null when idle. */
     val trailPrefetchProgress: Pair<Int, Int>? = null,
+    /** Which area the trail download is for ("KC Metro", "Current view 1"), for its status card. */
+    val trailPrefetchArea: String? = null,
     /** Bytes of offline trail data held. Durable, so the user needs to see and manage it. */
     val offlineTrailBytes: Long = 0L,
 ) {
@@ -709,7 +711,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
      * the app ever fetches; because the cache serves any request a stored circle contains, one
      * of these covers every later pan and zoom inside the area.
      */
-    fun prefetchTrailsFor(bounds: ViewBounds) {
+    fun prefetchTrailsFor(bounds: ViewBounds, areaName: String = "This area") {
         val mtb = _state.value.mode == MapMode.MTB
         // Store circles at the radius this mode will actually ask for. A cached circle only
         // answers requests it fully contains, and MTB asks for its chip radius — 40 km at the
@@ -721,16 +723,31 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
             val coverage = coverCircles(bounds, prefetchStep())
             val circles = coverage.circles
             var failed = 0
-            _state.update { it.copy(trailPrefetch = "Trails 0/${circles.size}", trailPrefetchProgress = 0 to circles.size) }
+            _state.update {
+                it.copy(trailPrefetch = "Trails 0/${circles.size}", trailPrefetchProgress = 0 to circles.size, trailPrefetchArea = areaName)
+            }
             var lastError: String? = null
-            circles.forEachIndexed { i, c ->
+            var saved = 0
+            var lostConnection = false
+            for ((i, c) in circles.withIndex()) {
                 if (!overpass.hasArea(c, radius, mtb)) {
                     runCatching { overpass.prefetch(c, radius, mtb) }
+                        .onSuccess { saved++ }
                         .onFailure { e ->
                             if (e is CancellationException) throw e
                             failed++
                             lastError = e.message
+                            lostConnection = e.isNoConnection
                         }
+                } else {
+                    saved++
+                }
+                // With no connection every remaining section would fail in milliseconds, and
+                // a device log showed it doing exactly that. Stop and say so instead; sections
+                // already saved are skipped when the user resumes.
+                if (lostConnection) {
+                    DiagLog.log("offline", "stopped: no connection after ${i + 1}/${circles.size}")
+                    break
                 }
                 _state.update {
                     it.copy(trailPrefetch = "Trails ${i + 1}/${circles.size}", trailPrefetchProgress = (i + 1) to circles.size)
@@ -741,6 +758,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 it.copy(
                     trailPrefetchProgress = null,
                     trailPrefetch = when {
+                        lostConnection ->
+                            "Paused: the connection dropped after $saved of ${circles.size} sections. " +
+                                "Tap Get trails to carry on; saved sections are kept."
                         // Never claim the whole area when only its middle was fetched.
                         failed == 0 && coverage.needed > circles.size ->
                             "Trails saved for the centre of this area " +
@@ -755,7 +775,16 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun clearTrailPrefetch() = _state.update { it.copy(trailPrefetch = null) }
+    fun clearTrailPrefetch() = _state.update { it.copy(trailPrefetch = null, trailPrefetchArea = null) }
+
+    /** Stop a running trail download. Sections already saved stay saved. */
+    fun cancelTrailPrefetch() {
+        prefetchJob?.cancel()
+        refreshOfflineSize()
+        _state.update {
+            it.copy(trailPrefetchProgress = null, trailPrefetch = "Stopped. Sections already saved are kept.")
+        }
+    }
 
     /**
      * How much of [bounds] has trail data in the offline store for the current mode, as
@@ -1128,3 +1157,13 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         private const val PARKS_BUDGET_MS = 60_000L
     }
 }
+
+/**
+ * The device has no usable connection — as opposed to a mirror being slow or refusing. A failed
+ * DNS lookup, a refused or aborted socket; Android reports its own network cut-off (screen off,
+ * background restrictions, a VPN reconnecting) as these.
+ */
+private val Throwable.isNoConnection: Boolean
+    get() = generateSequence(this) { it.cause }.any {
+        it is java.net.UnknownHostException || it is java.net.ConnectException || it is java.net.SocketException
+    }

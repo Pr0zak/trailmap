@@ -116,6 +116,26 @@ class ScreenSnapshots {
         )
     }
 
+    @Test fun offline_get_trails() = shot { Offline(Samples.ui.copy(trailPrefetchProgress = 3 to 9, trailPrefetchArea = "KC Metro")) }
+    @Test fun offline_paused() = shot {
+        Offline(
+            Samples.ui.copy(
+                trailPrefetchArea = "KC Metro",
+                trailPrefetch = "Paused: the connection dropped after 3 of 9 sections. Tap Get trails to carry on; saved sections are kept.",
+            ),
+        )
+    }
+
+    @Composable
+    private fun Offline(ui: TrailsUiState) = OfflineContent(
+        ui = ui.copy(viewBounds = com.trailmap.data.ViewBounds(39.15, 39.05, -94.5, -94.65, 12.0), offlineTrailBytes = 12_900_000L),
+        areas = listOf(OfflineAreaUi(1, "KC Metro 1", 100, true, 18_422, trails = 3 to 9)),
+        status = null,
+        onBack = {}, onOpenDiagnostics = {}, onDownloadView = {}, onDownloadPreset = {},
+        onRetry = {}, onDelete = {}, onClearTrails = {},
+        presetTrails = mapOf("KC Metro" to (3 to 9)),
+    )
+
     @Test fun diagnostics() = shot {
         DiagnosticsContent(Samples.diagLines, onBack = {}, onShare = {}, onClear = {})
     }
