@@ -5,6 +5,8 @@ import android.content.Context
 import com.trailmap.data.DiagLog
 import com.trailmap.data.OverpassClient
 import com.trailmap.data.Prefs
+import com.trailmap.data.TrailPack
+import com.trailmap.offline.TrailPackWorker
 import org.maplibre.android.MapLibre
 
 class TrailmapApp : Application() {
@@ -12,10 +14,17 @@ class TrailmapApp : Application() {
         super.onCreate()
         // MapLibre 11 requires init before any MapView is inflated. No API key needed.
         MapLibre.getInstance(this)
+        TrailPackWorker.enqueueIfDue(this)
     }
 
     companion object {
         private var client: OverpassClient? = null
+        private var trailPack: TrailPack? = null
+
+        /** The regional trail pack, shared by the Overpass client and its download job. */
+        @Synchronized
+        fun pack(context: Context): TrailPack =
+            trailPack ?: TrailPack(context.applicationContext.filesDir).also { trailPack = it }
 
         /**
          * The one Overpass client for the process.
@@ -29,7 +38,7 @@ class TrailmapApp : Application() {
         @Synchronized
         fun overpass(context: Context): OverpassClient {
             val app = context.applicationContext
-            return client ?: OverpassClient(app.cacheDir, app.filesDir, Prefs(app)).also {
+            return client ?: OverpassClient(app.cacheDir, app.filesDir, Prefs(app), pack = pack(app)).also {
                 client = it
                 DiagLog.log("app", "overpass client created")
             }

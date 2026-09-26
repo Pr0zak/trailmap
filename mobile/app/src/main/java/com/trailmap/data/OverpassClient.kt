@@ -64,6 +64,8 @@ class OverpassClient(
     private val prefs: Prefs? = null,
     /** Overpass mirrors, in default order. Overridable so tests can point at local servers. */
     private val endpoints: List<String> = DEFAULT_ENDPOINTS,
+    /** The downloaded regional pack. Inside it, loads never touch the network. */
+    val pack: TrailPack? = null,
 ) {
 
     /** Scope for background cache refreshes, which outlive the load that triggered them. */
@@ -141,11 +143,15 @@ class OverpassClient(
      * [hasArea] also counts the transient cache, which Android and the 7-day sweep can empty.
      */
     fun hasSavedArea(center: GeoPoint, radiusMeters: Int, mtb: Boolean): Boolean =
-        coveringCache(if (mtb) "mtb" else "all", center, radiusMeters, durableOnly = true) != null
+        packCovers(center) ||
+            coveringCache(if (mtb) "mtb" else "all", center, radiusMeters, durableOnly = true) != null
 
     /** True if this exact area is already on disk, so a prefetch can skip it. */
     fun hasArea(center: GeoPoint, radiusMeters: Int, mtb: Boolean): Boolean =
-        coveringCache(if (mtb) "mtb" else "all", center, radiusMeters) != null
+        packCovers(center) || coveringCache(if (mtb) "mtb" else "all", center, radiusMeters) != null
+
+    /** The regional pack answers a circle centred here, so it needs no network at all. */
+    fun packCovers(center: GeoPoint): Boolean = pack?.covers(center) == true
 
     /**
      * The circle that would answer this request from cache, or null if it needs the network.
@@ -156,13 +162,16 @@ class OverpassClient(
      * enough from that centre every camera idle refetches the same file forever.
      */
     fun cachedCircleFor(center: GeoPoint, radiusMeters: Int, mtb: Boolean): Pair<GeoPoint, Int>? =
-        coveringCache(if (mtb) "mtb" else "all", center, radiusMeters)?.let { it.center to it.radius }
+        // The pack serves every circle as asked, centred where it was asked, so it never hands
+        // back the circle already on screen and can't cause the livelock this guards against.
+        if (packCovers(center)) null else coveringCache(if (mtb) "mtb" else "all", center, radiusMeters)?.let { it.center to it.radius }
 
     /**
      * True when this (center, radius) can be served without touching the network — the caller
      * uses it to skip the ride-out-the-flick debounce for an area that will come back instantly.
      */
     fun isWarm(center: GeoPoint, radiusMeters: Int, mtb: Boolean): Boolean {
+        if (packCovers(center)) return true
         val hit = coveringCache(if (mtb) "mtb" else "all", center, radiusMeters) ?: return false
         synchronized(memo) { if (memo.containsKey(hit.file.name)) return true }
         return System.currentTimeMillis() - hit.file.lastModified() < CACHE_TTL_MS
@@ -261,9 +270,12 @@ class OverpassClient(
         query: String,
         durable: Boolean = false,
     ): Elements {
+        val t0 = System.currentTimeMillis()
+        // Inside the regional pack, it is the answer — even for a forced refresh, since it is at
+        // most a week old and the alternative is a public server that may take a minute or 504.
+        pack?.takeIf { it.covers(center) }?.let { return packElements(it, kind, center, radiusMeters, t0) }
         // Work out which file would answer this before touching the disk, so a memo hit skips
         // the multi-megabyte read as well as the parse.
-        val t0 = System.currentTimeMillis()
         val source = if (forceRefresh) null else coveringCache(kind, center, radiusMeters)
         if (source != null) {
             synchronized(memo) { memo[source.file.name] }?.let {
@@ -286,6 +298,51 @@ class OverpassClient(
         val key = source?.file?.name ?: cacheFile(kind, center, raw.radius)?.name
         if (key != null) memoPut(key, Memoized(parsed, raw.text.length))
         return Elements(parsed, raw.center, raw.radius)
+    }
+
+    /**
+     * Everything the pack holds within [radiusMeters] of [center] — what the same Overpass
+     * `around:` query would return. Tiles are parsed once and kept in the memo, so panning
+     * around a region already visited costs only the distance filter.
+     */
+    private fun packElements(
+        pack: TrailPack,
+        kind: String,
+        center: GeoPoint,
+        radiusMeters: Int,
+        t0: Long,
+    ): Elements {
+        val seen = HashSet<Pair<String, Long>>()
+        val out = ArrayList<OverpassElement>()
+        val tiles = pack.tilesFor(center, radiusMeters)
+        var parsedNow = 0
+        val cosLat = cos(Math.toRadians(center.lat))
+        val r2 = radiusMeters.toDouble() * radiusMeters
+        // Flat-earth distance is plenty at 40 km, and this runs over every vertex in the tiles.
+        fun near(n: OverpassNode): Boolean {
+            val dy = (n.lat - center.lat) * 111_320.0
+            val dx = (n.lon - center.lon) * 111_320.0 * cosLat
+            return dx * dx + dy * dy <= r2
+        }
+        for ((x, y) in tiles) {
+            val key = "pack_${pack.version}_${kind}_${x}_$y"
+            val elements = synchronized(memo) { memo[key] }?.elements ?: run {
+                val text = pack.tile(kind, x, y) ?: return@run emptyList()
+                parsedNow++
+                parseResponse(text).elements.also { memoPut(key, Memoized(it, text.length)) }
+            }
+            for (el in elements) {
+                if ((el.type to el.id) in seen) continue
+                val inside = el.geometry.any(::near) || el.members.any { m -> m.geometry.any(::near) }
+                if (inside && seen.add(el.type to el.id)) out.add(el)
+            }
+        }
+        DiagLog.log(
+            "cache",
+            "$kind pack, ${tiles.size} tiles ($parsedNow parsed), ${out.size} elements within " +
+                "$radiusMeters m, ${System.currentTimeMillis() - t0} ms",
+        )
+        return Elements(out, center, radiusMeters)
     }
 
     /**
@@ -320,7 +377,7 @@ class OverpassClient(
     private fun parksReady(center: GeoPoint, radiusMeters: Int): Boolean {
         val reusable = lastParksCenter != null && lastParksRadius >= radiusMeters &&
             Geo.haversineMeters(lastParksCenter!!, center) < lastParksRadius * PARK_REUSE_FRACTION
-        return reusable || coveringCache("parks", center, radiusMeters) != null
+        return reusable || packCovers(center) || coveringCache("parks", center, radiusMeters) != null
     }
 
     private var lastParks: List<Park> = emptyList()
@@ -1113,9 +1170,9 @@ class OverpassClient(
         /** Disk-cache freshness window: 7 days. */
         val CACHE_TTL_MS = TimeUnit.DAYS.toMillis(7)
         /** Total size of the JSON behind the in-memory parse cache, before LRU eviction. */
-        const val MEMO_BUDGET_BYTES = 8L * 1024 * 1024
+        const val MEMO_BUDGET_BYTES = 16L * 1024 * 1024
         /** Backstop on entry count, so many tiny zoomed-in areas can't accumulate forever. */
-        const val MEMO_MAX_ENTRIES = 12
+        const val MEMO_MAX_ENTRIES = 48
         /**
          * Minimum gap between requests actually put on the wire. Overpass instances hand out
          * temporary per-IP blocks, and a map that refetches as you pan is the exact traffic

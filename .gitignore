@@ -27,3 +27,11 @@ mobile/.kotlin/
 __pycache__/
 *.py[cod]
 .venv/
+
+# Trail pack build (trailpack/build_pack.py) — extracts and output, never committed
+/work/
+trailpack/work/
+*.osm.pbf
+*.poly
+trailpack.zip
+trailpack.zip.part

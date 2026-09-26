@@ -2,16 +2,19 @@
 
 A personal Android app (Kotlin / Jetpack Compose) that shows nearby walking & biking trails —
 **paved, gravel, dirt** — on a map, colored by surface, with a dedicated **mountain-bike mode**.
-App-only: the phone talks directly to OpenStreetMap and free elevation APIs — no backend.
+App-only: no backend. Trails for Kansas and Missouri come from a pre-built **trail pack** the app
+downloads once (rebuilt weekly from OpenStreetMap by GitHub Actions); elsewhere it asks OpenStreetMap's
+Overpass API directly.
 
 <p align="center"><em>Built and tested around Kansas City.</em></p>
 
 ## Features
 
 - **Map** (MapLibre GL Native, keyless) with trail polylines **colored by surface** (paved/gravel/dirt),
-  a theme-aware basemap (light OSM / CARTO dark), zoom-scaled line widths + casing, and a color **legend**.
-- **Surface & activity filters** (paved/gravel/dirt · walk/bike), a **min-length** filter, and **name search**.
-- **Trail list + detail** — nearby trails sorted by distance, with an **elevation profile** sampled along the trail.
+  a theme-aware basemap (light OSM / OpenFreeMap dark), zoom-scaled line widths + casing, and a color **legend**.
+- **Surface & activity filters** (paved/gravel/dirt · walk/bike/horse), a **min-length** filter, and **name search**.
+- **Trail list + detail** — nearby trails sorted by distance, with an **elevation profile** along the trail
+  in riding order (the trail's OSM pieces are chained end to end first).
 - **MTB mode** — mountain-bike trails only (`route=mtb` / `mtb:scale`), a **10/25/40-mile** radius selector,
   IMBA-style **difficulty badges** (S0–S6), difficulty-colored map lines, and trails **clustered into systems**
   named after their enclosing OSM park (e.g. *Kessler Park*, *Swope Park*).
@@ -20,7 +23,7 @@ App-only: the phone talks directly to OpenStreetMap and free elevation APIs — 
 
 | Need | Source |
 |------|--------|
-| Trails + parks | **OpenStreetMap** via the [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API) (with mirror fallback) |
+| Trails + parks | **OpenStreetMap**: the trail pack (built from [Geofabrik](https://download.geofabrik.de/) extracts by `trailpack/build_pack.py`), else the [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API) (with mirror fallback) |
 | Elevation | **Open-Topo-Data** (`ned10m`), USGS EPQS spot-check |
 | Basemap | OSM raster (light) / [OpenFreeMap](https://openfreemap.org) `dark` (dark mode) |
 
@@ -42,7 +45,9 @@ Push a `app-vX.Y.Z` tag and GitHub Actions builds + signs the APK and attaches i
 
 - Not a certified navigation aid — a personal trail-discovery tool.
 - Trail names, surfaces, and difficulty come from community OSM data and vary in completeness.
-- Heavy public-Overpass use is fine for personal scale; self-hosting is the path if it ever grows.
+- The trail pack (`trailpack` release, `.github/workflows/trailpack.yml`) holds OpenStreetMap data,
+  © OpenStreetMap contributors, available under the [ODbL](https://www.openstreetmap.org/copyright).
+  Add states with `--regions` in the workflow.
 
 ## License
 

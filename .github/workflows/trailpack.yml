@@ -1,0 +1,47 @@
+name: trailpack
+
+# Rebuilds the regional trail pack from Geofabrik's OpenStreetMap extracts and publishes it as
+# the `trailpack.zip` asset of the `trailpack` release, which the app downloads (see
+# TrailPackWorker). The release is a prerelease so the app updater, which reads
+# /releases/latest, never treats it as an app version.
+on:
+  schedule:
+    - cron: '23 9 * * 1'   # Mondays; Geofabrik publishes the US extracts daily
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['trailpack/**', '.github/workflows/trailpack.yml']
+
+permissions:
+  contents: write   # create/update the release
+
+concurrency:
+  group: trailpack
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install osmium + shapely
+        run: pip install osmium shapely
+
+      - name: Build pack
+        run: python trailpack/build_pack.py --regions kansas missouri --workdir work --out trailpack.zip
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view trailpack >/dev/null 2>&1; then
+            gh release create trailpack --prerelease --latest=false \
+              --title "Trail data pack" \
+              --notes "Every Kansas and Missouri trail the app shows, pre-extracted from OpenStreetMap so the app doesn't have to query a public Overpass server on every pan. Rebuilt weekly by .github/workflows/trailpack.yml. Map data © OpenStreetMap contributors, available under the Open Database License (ODbL): https://www.openstreetmap.org/copyright"
+          fi
+          gh release upload trailpack trailpack.zip --clobber

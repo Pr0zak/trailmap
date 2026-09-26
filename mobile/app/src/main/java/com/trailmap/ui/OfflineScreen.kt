@@ -240,6 +240,9 @@ fun OfflineScreen(vm: TrailsViewModel, onBack: () -> Unit, onOpenDiagnostics: ()
             jobs.filterKeys { it !in ui.trailQueuedKeys }.values.forEach { (b, name) -> vm.prefetchTrailsFor(b, name) }
         },
         onDismissTrailResult = vm::clearTrailPrefetch,
+        onDownloadPack = vm::downloadTrailPack,
+        onCheckPack = vm::checkTrailPack,
+        onRemovePack = vm::removeTrailPack,
     )
 }
 
@@ -276,6 +279,9 @@ internal fun OfflineContent(
     onCancelTrails: () -> Unit = {},
     onGetAllTrails: () -> Unit = {},
     onDismissTrailResult: () -> Unit = {},
+    onDownloadPack: () -> Unit = {},
+    onCheckPack: () -> Unit = {},
+    onRemovePack: () -> Unit = {},
 ) {
 
     Scaffold(
@@ -302,6 +308,9 @@ internal fun OfflineContent(
         ) {
             // What's stored, up top, instead of paragraphs at the bottom.
             item { StorageSummary(ui, areas, onClearTrails) }
+
+            // The regional trail pack is what makes loads instant, so it leads the screen.
+            item(key = "pack") { TrailPackCard(ui, onDownloadPack, onCheckPack, onRemovePack) }
 
             // Anything still downloading, with map tiles and trail data side by side.
             val tileDownloads = areas.filter { !it.complete }
@@ -461,6 +470,65 @@ internal fun OfflineContent(
         }
     }
 }
+
+/**
+ * The regional trail pack: every trail in Kansas and Missouri, downloaded once, so loads there
+ * read the phone's storage instead of waiting on a public Overpass server.
+ */
+@Composable
+private fun TrailPackCard(ui: TrailsUiState, onDownload: () -> Unit, onCheck: () -> Unit, onRemove: () -> Unit) {
+    val pack = ui.pack
+    val dl = ui.packDownload
+    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                if (pack != null) "${regionNames(pack.regions)} trails on this phone" else "Trail pack",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                when {
+                    dl != null -> "Downloading…"
+                    pack != null -> "%.1f MB · OpenStreetMap data from %s. Trails there load instantly and work offline."
+                        .format(pack.bytes / (1024.0 * 1024.0), osmDate(pack.osmTimestamp))
+                    ui.packFailed -> "The download didn't finish. Trails still load from OpenStreetMap's servers, which can be slow."
+                    ui.packWaiting -> "Waiting for a connection. It downloads by itself."
+                    else -> "Every Kansas and Missouri trail in one ~9 MB download, so the map loads trails " +
+                        "instantly instead of waiting on OpenStreetMap's servers."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (dl != null) {
+                val f = if (dl.second > 0) dl.first.toFloat() / dl.second else 0f
+                ProgressLine("%.1f of %.1f MB".format(dl.first / 1048576.0, dl.second / 1048576.0), f)
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (pack == null) {
+                        Button(onClick = onDownload) { Text(if (ui.packFailed) "Retry" else "Download") }
+                    } else {
+                        TextButton(onClick = onCheck) { Text("Check for update") }
+                        TextButton(onClick = onRemove) { Text("Remove") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun regionNames(regions: List<String>): String {
+    val names = regions.map { r -> r.split('-').joinToString(" ") { w -> w.replaceFirstChar { it.uppercase() } } }
+    return when (names.size) {
+        0 -> "Regional"
+        1 -> names[0]
+        else -> names.dropLast(1).joinToString(", ") + " & " + names.last()
+    }
+}
+
+/** "2026-09-25T20:24:36Z" → "Sep 25". */
+private fun osmDate(iso: String?): String = runCatching {
+    java.time.OffsetDateTime.parse(iso).format(java.time.format.DateTimeFormatter.ofPattern("MMM d", java.util.Locale.US))
+}.getOrDefault("recently")
 
 /** Areas, tiles and trail data held, with a way to clear the trail data. */
 @Composable

@@ -25,6 +25,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import androidx.work.WorkInfo
 import com.trailmap.offline.TrailDownloads
+import com.trailmap.offline.TrailPackWorker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -107,6 +108,14 @@ data class TrailsUiState(
     val trailQueuedKeys: Set<String> = emptySet(),
     /** Bytes of offline trail data held. Durable, so the user needs to see and manage it. */
     val offlineTrailBytes: Long = 0L,
+    /** The installed regional trail pack; null when there is none. */
+    val pack: PackStatus? = null,
+    /** Trail pack download in progress: bytes done to total. Null when not downloading. */
+    val packDownload: Pair<Long, Long>? = null,
+    /** The trail pack job is waiting — for a connection, or to retry a failed download. */
+    val packWaiting: Boolean = false,
+    /** The last trail pack download gave up after its retries. */
+    val packFailed: Boolean = false,
 ) {
     val radiusMiles: Double get() = radiusMeters / 1609.344
 
@@ -183,6 +192,14 @@ data class TrailsUiState(
     fun isSaved(id: String): Boolean = id in savedIds
 }
 
+/** What the Offline screen says about the installed trail pack. */
+data class PackStatus(
+    val regions: List<String>,
+    /** When the OSM data it was built from was current (ISO-8601), if the extract said. */
+    val osmTimestamp: String?,
+    val bytes: Long,
+)
+
 class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = Prefs(app)
     private val overpass = com.trailmap.TrailmapApp.overpass(app)
@@ -206,6 +223,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         watchTrailDownloads()
+        watchTrailPack()
         // First line of any shared log: which build and which device produced it.
         DiagLog.log(
             "app",
@@ -741,6 +759,52 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
      * waiting, and — when a job finishes while we're watching — how it ended. Jobs that were
      * already finished when the app started are history, not news, so they're not announced.
      */
+    /**
+     * Mirror the trail pack into UI state, and reload the moment a first pack lands: until then
+     * every load in the region went to Overpass, and a failed or slow one is likely still what
+     * is on screen.
+     */
+    private fun watchTrailPack() {
+        val pack = overpass.pack ?: return
+        viewModelScope.launch {
+            var had = pack.ready
+            pack.meta.collect { m ->
+                _state.update {
+                    it.copy(pack = m?.let { meta -> PackStatus(meta.regions, meta.osmTimestamp, pack.bytes()) })
+                }
+                if (m != null && !had) {
+                    DiagLog.log("pack", "ready; reloading the current area from it")
+                    val here = lastCamera?.point ?: _state.value.center
+                    if (bootstrapped && !bootstrapPending && overpass.packCovers(here)) load(here, initialFetchRadius())
+                }
+                had = m != null
+            }
+        }
+        viewModelScope.launch {
+            TrailPackWorker.observe(getApplication()).collect { info ->
+                _state.update { s ->
+                    s.copy(
+                        packDownload = info?.takeIf { it.state == WorkInfo.State.RUNNING }?.progress?.let { p ->
+                            p.getLong(TrailPackWorker.KEY_DONE, 0L) to p.getLong(TrailPackWorker.KEY_TOTAL, 0L)
+                        },
+                        packWaiting = info?.state == WorkInfo.State.ENQUEUED,
+                        packFailed = info?.state == WorkInfo.State.FAILED,
+                    )
+                }
+            }
+        }
+    }
+
+    /** Fetch the trail pack now — the Offline screen's Download / Update / Retry. */
+    fun downloadTrailPack() = TrailPackWorker.enqueue(getApplication(), force = _state.value.pack == null)
+
+    /** Look for a newer pack now, downloading it only if there is one. */
+    fun checkTrailPack() = TrailPackWorker.enqueue(getApplication(), force = false)
+
+    fun removeTrailPack() {
+        overpass.pack?.remove()
+    }
+
     private fun watchTrailDownloads() = viewModelScope.launch {
         val seenActive = HashSet<java.util.UUID>()
         TrailDownloads.observe(getApplication()).collect { infos ->
