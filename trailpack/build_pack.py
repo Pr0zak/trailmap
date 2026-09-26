@@ -16,10 +16,12 @@ it with the code it already has:
     all/<x>_<y>.json       ALL mode: named paths/cycleways/tracks/bridleways + non-sidewalk footways
     mtb/<x>_<y>.json       MTB mode: named mtb:scale ways, designated dirt bike paths, route=mtb
     parks/<x>_<y>.json     named parks/reserves/protected areas, for naming MTB trail systems
+    <kind>/wide.json       elements wider than a tile (long-distance routes, national forests)
 
-x = floor(lon / 0.25), y = floor(lat / 0.25). An element is written to every tile any of its
-vertices falls in, so the app de-duplicates by (type, id) when it reads several tiles — and
-across states, since Geofabrik's extracts overlap at the borders.
+x = floor(lon / 0.25), y = floor(lat / 0.25). Each element is stored once (schema 2): in the tile
+holding its centre if it is no wider than a tile, otherwise in <kind>/wide.json. The app reads the
+tiles around a circle plus one ring, and the wide file, and de-duplicates by (type, id) across
+states, since Geofabrik's extracts overlap at the borders.
 
 The filters below must stay in step with buildQuery / buildMtbQuery / buildParkQuery in
 mobile/app/src/main/java/com/trailmap/data/OverpassClient.kt. Bump PACK_SCHEMA (here and in the
@@ -53,7 +55,7 @@ from collections import defaultdict
 # osmium and shapely are imported where they are used: the `states` and `index` subcommands run
 # in CI jobs that don't install them.
 
-PACK_SCHEMA = 1
+PACK_SCHEMA = 2
 TILE_DEG = 0.25
 GEOFABRIK = "https://download.geofabrik.de/north-america/us"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -310,9 +312,21 @@ def build(regions: list[str], workdir: str, out: str, index_entry: str | None = 
     shapes = []
     stamps = []
 
+    wide: dict[str, dict[tuple[str, int], dict]] = {"all": {}, "mtb": {}, "parks": {}}
+
     def place(kind: str, el: dict, vertices):
-        for tile in {tile_of(lat, lon) for lat, lon in vertices}:
-            tiles[kind][tile][(el["type"], el["id"])] = el
+        # Stored once. An element no wider than a tile goes in the tile holding its centre, so
+        # any part of it lies within one tile of there; the app reads a ring of tiles around
+        # each circle. Anything wider goes in <kind>/wide.json, which the app always reads.
+        # Writing elements into every tile they touched copied the Arizona Trail relation into
+        # 39 tiles (123 MB of Arizona's 132 MB of MTB data) and each national forest into 25-45.
+        lats = [v[0] for v in vertices]
+        lons = [v[1] for v in vertices]
+        key = (el["type"], el["id"])
+        if max(max(lats) - min(lats), max(lons) - min(lons)) > TILE_DEG:
+            wide[kind][key] = el
+        else:
+            tiles[kind][tile_of((min(lats) + max(lats)) / 2, (min(lons) + max(lons)) / 2)][key] = el
 
     for region in regions:
         pbf = os.path.join(workdir, f"{region}.osm.pbf")
@@ -402,8 +416,13 @@ def build(regions: list[str], workdir: str, out: str, index_entry: str | None = 
                 body = json.dumps({"elements": list(els.values())}, separators=(",", ":"), ensure_ascii=False)
                 raw_total += len(body)
                 z.writestr(f"{kind}/{x}_{y}.json", body)
+        for kind, els in wide.items():
+            if els:
+                body = json.dumps({"elements": list(els.values())}, separators=(",", ":"), ensure_ascii=False)
+                raw_total += len(body)
+                z.writestr(f"{kind}/wide.json", body)
     os.replace(tmp, out)
-    sizes = {k: len(v) for k, v in tiles.items()}
+    sizes = {k: f"{len(v)}+{len(wide[k])} wide" for k, v in tiles.items()}
     print(
         f"wrote {out}: {os.path.getsize(out) / 1e6:.1f} MB zipped, {raw_total / 1e6:.1f} MB raw, "
         f"tiles {sizes}, {len(covered)} covered, OSM data as of {stamp}",
