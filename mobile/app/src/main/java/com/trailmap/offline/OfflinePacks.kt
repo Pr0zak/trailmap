@@ -48,8 +48,8 @@ data class OfflineArea(
 object OfflinePacks {
     private const val LIGHT_STYLE =
         "https://raw.githubusercontent.com/Pr0zak/trailmap/main/mobile/app/src/main/assets/osm_raster_style.json"
-    private const val DARK_STYLE =
-        "https://raw.githubusercontent.com/Pr0zak/trailmap/main/mobile/app/src/main/assets/carto_dark_style.json"
+    // Already an http(s) style, so it needs no hosted copy. Must match STYLE_DARK in MapScreen.
+    private const val DARK_STYLE = "https://tiles.openfreemap.org/styles/dark"
 
     private const val MAX_RETRIES = 4
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())

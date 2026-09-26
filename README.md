@@ -22,7 +22,7 @@ App-only: the phone talks directly to OpenStreetMap and free elevation APIs — 
 |------|--------|
 | Trails + parks | **OpenStreetMap** via the [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API) (with mirror fallback) |
 | Elevation | **Open-Topo-Data** (`ned10m`), USGS EPQS spot-check |
-| Basemap | OSM raster (light) / CARTO dark (dark mode) |
+| Basemap | OSM raster (light) / [OpenFreeMap](https://openfreemap.org) `dark` (dark mode) |
 
 ## Build
 

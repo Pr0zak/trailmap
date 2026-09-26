@@ -89,7 +89,9 @@ private const val SRC_HIGHLIGHT = "trail-highlight"
 private const val LAYER_HIGHLIGHT = "trail-highlight-line"
 private const val EMPTY_FC = """{"type":"FeatureCollection","features":[]}"""
 private const val STYLE_LIGHT = "asset://osm_raster_style.json"
-private const val STYLE_DARK = "asset://carto_dark_style.json"
+// OpenFreeMap's dark vector style: keyless and unmetered. CARTO's dark_all raster, used
+// before, started answering every tile with an "API KEY REQUIRED" placeholder.
+private const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
 @SuppressLint("MissingPermission")
 @Composable
