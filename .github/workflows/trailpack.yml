@@ -36,7 +36,12 @@ jobs:
       - id: states
         env:
           ONLY: ${{ github.event.inputs.states }}
-        run: echo "states=$(python3 trailpack/build_pack.py states --only "$ONLY")" >> "$GITHUB_OUTPUT"
+        # An assignment, so a failing script fails the step. Inside `echo "$(...)"` the error was
+        # swallowed and the matrix came out empty — no state was built and nothing said why.
+        run: |
+          states=$(python3 trailpack/build_pack.py states --only "$ONLY")
+          test "$states" != "[]"
+          echo "states=$states" >> "$GITHUB_OUTPUT"
 
       - name: Make sure the release exists
         env:

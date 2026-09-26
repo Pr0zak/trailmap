@@ -50,10 +50,8 @@ import urllib.request
 import zipfile
 from collections import defaultdict
 
-import osmium
-from shapely.geometry import Polygon, box
-from shapely.ops import unary_union
-from shapely.prepared import prep
+# osmium and shapely are imported where they are used: the `states` and `index` subcommands run
+# in CI jobs that don't install them.
 
 PACK_SCHEMA = 1
 TILE_DEG = 0.25
@@ -152,64 +150,73 @@ def geom_json(pts, digits: int):
 
 # --- OSM passes ------------------------------------------------------------------------------
 
-class RelationPass(osmium.SimpleHandler):
-    """Pass 1: relations we keep, and the member ways they need geometry for."""
+def handlers():
+    """The two OSM passes, defined on first use so osmium is only needed for `build`."""
+    import osmium
 
-    def __init__(self):
-        super().__init__()
-        self.mtb = {}     # id -> (tags, [(ref, role)])
-        self.parks = {}
-        self.needed = set()
+    class RelationPass(osmium.SimpleHandler):
+        """Pass 1: relations we keep, and the member ways they need geometry for."""
 
-    def relation(self, r):
-        t = dict(r.tags)
-        if t.get("route") == "mtb":
-            target = self.mtb
-        elif is_park(t):
-            target = self.parks
-        else:
-            return
-        members = [(m.ref, m.role) for m in r.members if m.type == "w"]
-        if not members:
-            return
-        target[r.id] = (t, members)
-        self.needed.update(ref for ref, _ in members)
+        def __init__(self):
+            super().__init__()
+            self.mtb = {}     # id -> (tags, [(ref, role)])
+            self.parks = {}
+            self.needed = set()
+
+        def relation(self, r):
+            t = dict(r.tags)
+            if t.get("route") == "mtb":
+                target = self.mtb
+            elif is_park(t):
+                target = self.parks
+            else:
+                return
+            members = [(m.ref, m.role) for m in r.members if m.type == "w"]
+            if not members:
+                return
+            target[r.id] = (t, members)
+            self.needed.update(ref for ref, _ in members)
 
 
-class WayPass(osmium.SimpleHandler):
-    """Pass 2 (with node locations): matching ways, plus every relation member way."""
+    class WayPass(osmium.SimpleHandler):
+        """Pass 2 (with node locations): matching ways, plus every relation member way."""
 
-    def __init__(self, needed):
-        super().__init__()
-        self.needed = needed
-        self.all = {}
-        self.mtb = {}
-        self.parks = {}
-        self.geom = {}  # way id -> [(lat, lon)] for relation members
+        def __init__(self, needed):
+            super().__init__()
+            self.needed = needed
+            self.all = {}
+            self.mtb = {}
+            self.parks = {}
+            self.geom = {}  # way id -> [(lat, lon)] for relation members
 
-    def way(self, w):
-        t = dict(w.tags)
-        flags = (is_all_way(t), is_mtb_way(t), is_park(t), w.id in self.needed)
-        if not any(flags):
-            return
-        try:
-            pts = [(n.lat, n.lon) for n in w.nodes]
-        except osmium.InvalidLocationError:
-            pts = [(n.lat, n.lon) for n in w.nodes if n.location.valid()]
-        if len(pts) < 2:
-            return
-        if flags[0]:
-            self.all[w.id] = (t, pts)
-        if flags[1]:
-            self.mtb[w.id] = (t, pts)
-        if flags[2]:
-            self.parks[w.id] = (t, pts)
-        if flags[3]:
-            self.geom[w.id] = pts
+        def way(self, w):
+            t = dict(w.tags)
+            flags = (is_all_way(t), is_mtb_way(t), is_park(t), w.id in self.needed)
+            if not any(flags):
+                return
+            try:
+                pts = [(n.lat, n.lon) for n in w.nodes]
+            except osmium.InvalidLocationError:
+                pts = [(n.lat, n.lon) for n in w.nodes if n.location.valid()]
+            if len(pts) < 2:
+                return
+            if flags[0]:
+                self.all[w.id] = (t, pts)
+            if flags[1]:
+                self.mtb[w.id] = (t, pts)
+            if flags[2]:
+                self.parks[w.id] = (t, pts)
+            if flags[3]:
+                self.geom[w.id] = pts
+
+    return RelationPass, WayPass
 
 
 def read_poly(path: str):
     """Geofabrik .poly -> shapely geometry (outer rings minus '!' holes)."""
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+
     outers, holes = [], []
     with open(path) as f:
         lines = [l.strip() for l in f]
@@ -243,6 +250,8 @@ def download(url: str, dest: str):
 
 
 def osm_timestamp(pbf: str) -> str | None:
+    import osmium
+
     try:
         return osmium.io.Reader(pbf, osmium.osm.osm_entity_bits.NOTHING).header().get(
             "osmosis_replication_timestamp"
@@ -289,6 +298,11 @@ def outline(shape, pad_deg: float, tol_deg: float):
 
 
 def build(regions: list[str], workdir: str, out: str, index_entry: str | None = None):
+    from shapely.geometry import box
+    from shapely.ops import unary_union
+    from shapely.prepared import prep
+
+    RelationPass, WayPass = handlers()
     os.makedirs(workdir, exist_ok=True)
     tiles: dict[str, dict[tuple[int, int], dict[tuple[str, int], dict]]] = {
         "all": defaultdict(dict), "mtb": defaultdict(dict), "parks": defaultdict(dict),
