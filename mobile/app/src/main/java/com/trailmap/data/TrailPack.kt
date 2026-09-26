@@ -174,6 +174,8 @@ class TrailPacks(filesDir: File) {
             // 0.15.0 downloaded Kansas + Missouri as one file. Carry its states over as the
             // selection, so they are fetched individually and it can then be retired.
             if (store.selected == null) packs[LEGACY]?.let { saveStore(store.copy(selected = it.meta.regions.toSet())) }
+            // 0.15.0's record of the combined pack, left behind when 0.16.0 retired the pack.
+            if (LEGACY !in packs) File(dir, "installed.json").delete()
             _selected.value = store.selected.orEmpty()
         }
     }
@@ -338,6 +340,12 @@ class TrailPacks(filesDir: File) {
 
     @Synchronized
     fun recordCheck(now: Long = System.currentTimeMillis()) = saveStore(store.copy(checkedAt = now))
+
+    /** The indexed states with any of a 5×5 grid of points over this box inside them. */
+    fun statesIn(west: Double, south: Double, east: Double, north: Double): List<StateEntry> {
+        val probes = (0..4).flatMap { i -> (0..4).map { j -> GeoPoint(south + (north - south) * i / 4, west + (east - west) * j / 4) } }
+        return _index.value?.states.orEmpty().filter { st -> probes.any(st::contains) }
+    }
 
     /** The indexed states that contain [p] — two where outlines overlap along a border. */
     fun statesAt(p: GeoPoint): List<StateEntry> = _index.value?.states.orEmpty().filter { it.contains(p) }

@@ -149,7 +149,7 @@ private fun StateRow(st: PackState, download: PackDownload?, trailing: @Composab
                 when {
                     download != null && download.state == st.name -> "Downloading…"
                     st.installed && st.updateAvailable -> "${megabytes(st.bytes)} · update downloading soon"
-                    st.installed -> "${megabytes(st.bytes)} · OpenStreetMap data from ${osmDate(st.osmTimestamp)}"
+                    st.installed -> megabytes(st.bytes) + (osmDate(st.osmTimestamp)?.let { " · OpenStreetMap data from $it" } ?: "")
                     st.selected -> "Waiting to download · ${megabytes(st.bytes)}"
                     else -> megabytes(st.bytes)
                 },
@@ -195,7 +195,9 @@ internal fun PackSyncStatus(ui: TrailsUiState) {
 
 internal fun megabytes(bytes: Long): String = "%.1f MB".format(bytes / (1024.0 * 1024.0))
 
-/** "2026-09-25T20:24:36Z" → "Sep 25". */
-internal fun osmDate(iso: String?): String = runCatching {
-    java.time.OffsetDateTime.parse(iso).format(java.time.format.DateTimeFormatter.ofPattern("MMM d", java.util.Locale.US))
-}.getOrDefault("recently")
+/** "2026-09-25T20:24:36Z" → "Sep 25"; null when there is no usable date. */
+internal fun osmDate(iso: String?): String? = iso?.let {
+    runCatching {
+        java.time.OffsetDateTime.parse(it).format(java.time.format.DateTimeFormatter.ofPattern("MMM d", java.util.Locale.US))
+    }.getOrNull()
+}

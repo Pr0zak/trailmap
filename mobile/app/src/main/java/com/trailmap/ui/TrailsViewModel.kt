@@ -24,7 +24,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import androidx.work.WorkInfo
-import com.trailmap.offline.TrailDownloads
 import com.trailmap.offline.TrailPackWorker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -97,17 +96,10 @@ data class TrailsUiState(
     val canAutoCover: Boolean = true,
     /** Set when the trails on screen came from an expired cache because the network failed. */
     val servingStale: Boolean = false,
-    /** Progress of the trail-data download that accompanies an offline area; null when idle. */
-    val trailPrefetch: String? = null,
-    /** Sections of trail data fetched / to fetch while an offline download runs; null when idle. */
-    val trailPrefetchProgress: Pair<Int, Int>? = null,
-    /** Which area the trail download is for ("KC Metro", "Current view 1"), for its status card. */
-    val trailPrefetchArea: String? = null,
-    /** More areas queued behind the running trail download. */
-    val trailQueued: Int = 0,
-    /** [TrailDownloads.keyFor] keys of areas queued or downloading, so their rows say so. */
-    val trailQueuedKeys: Set<String> = emptySet(),
-    /** Bytes of offline trail data held. Durable, so the user needs to see and manage it. */
+    /**
+     * Bytes of trail data saved per region before state packs (0.16.0 and earlier). Still read,
+     * but nothing writes it any more; the Offline screen offers to clear it while it exists.
+     */
     val offlineTrailBytes: Long = 0L,
     /** Every state with trail data: offered by the release, chosen, or on the phone. */
     val packStates: List<PackState> = emptyList(),
@@ -244,7 +236,6 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     private val dismissedSuggestions = HashSet<String>()
 
     init {
-        watchTrailDownloads()
         watchTrailPack()
         // First line of any shared log: which build and which device produced it.
         DiagLog.log(
@@ -763,36 +754,6 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Download the trail data for an offline area, so a downloaded region has trails on it and
-     * not just basemap tiles. The bbox is covered with overlapping circles at the widest radius
-     * the app ever fetches; because the cache serves any request a stored circle contains, one
-     * of these covers every later pan and zoom inside the area.
-     */
-    fun prefetchTrailsFor(bounds: ViewBounds, areaName: String = "This area") {
-        val mtb = _state.value.mode == MapMode.MTB
-        // Store circles at the radius this mode will actually ask for. A cached circle only
-        // answers requests it fully contains, and MTB asks for its chip radius — 40 km at the
-        // default — so tiling at MAX_AUTO_RADIUS (24 km) wrote MTB areas that no MTB load
-        // could ever read. Downloading an area in MTB mode did nothing at all.
-        val coverage = coverCircles(bounds, prefetchStep())
-        // The download itself runs as a background job (TrailDownloads), so it survives the
-        // user leaving the app and resumes after a dropped connection.
-        viewModelScope.launch {
-            TrailDownloads.enqueue(getApplication(), areaName, bounds, coverage.circles, prefetchRadius(), mtb, coverage.needed)
-        }
-    }
-
-    fun clearTrailPrefetch() = _state.update { it.copy(trailPrefetch = null, trailPrefetchArea = null) }
-
-    /** Stop the running trail download and anything queued. Sections already saved stay saved. */
-    fun cancelTrailPrefetch() = TrailDownloads.cancelAll(getApplication())
-
-    /**
-     * Mirror the download queue into UI state: the running job's progress, how many areas are
-     * waiting, and — when a job finishes while we're watching — how it ended. Jobs that were
-     * already finished when the app started are history, not news, so they're not announced.
-     */
-    /**
      * Mirror the state packs into UI state, and reload the moment a new pack covers the map:
      * until then that area came from Overpass, and a failed or slow load is likely what is still
      * on screen.
@@ -918,149 +879,45 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     /** Look for newer packs now; only changed states are downloaded. */
     fun checkTrailPacks() = TrailPackWorker.enqueue(getApplication())
 
-    private fun watchTrailDownloads() = viewModelScope.launch {
-        val seenActive = HashSet<java.util.UUID>()
-        TrailDownloads.observe(getApplication()).collect { infos ->
-            val running = infos.firstOrNull { it.state == WorkInfo.State.RUNNING }
-            val waiting = infos.filter { it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.BLOCKED }
-            infos.filter { !it.state.isFinished }.forEach { seenActive += it.id }
-            val justFinished = infos.filter { it.state.isFinished && seenActive.remove(it.id) }
-            _state.update { s ->
-                var next = s.copy(trailQueuedKeys = TrailDownloads.activeKeys(infos))
-                if (running != null) {
-                    val p = running.progress
-                    val total = p.getInt(TrailDownloads.KEY_TOTAL, 0)
-                    next = next.copy(
-                        trailPrefetchProgress = p.getInt(TrailDownloads.KEY_DONE, 0) to total,
-                        trailPrefetchArea = p.getString(TrailDownloads.KEY_AREA) ?: next.trailPrefetchArea,
-                        trailPrefetch = p.getString(TrailDownloads.KEY_NOTE),
-                        trailQueued = waiting.size,
-                    )
-                } else if (waiting.isNotEmpty()) {
-                    // Queued but not running: waiting for the network (or a retry back-off).
-                    next = next.copy(
-                        trailPrefetchProgress = 0 to 0,
-                        trailPrefetch = "Waiting for a connection. The download resumes by itself.",
-                        trailQueued = waiting.size - 1,
-                    )
-                } else {
-                    next = next.copy(trailPrefetchProgress = null, trailQueued = 0)
-                }
-                justFinished.lastOrNull()?.let { done ->
-                    val out = done.outputData
-                    next = next.copy(
-                        trailPrefetchArea = out.getString(TrailDownloads.KEY_RESULT_AREA) ?: next.trailPrefetchArea,
-                        trailPrefetch = when (done.state) {
-                            WorkInfo.State.CANCELLED -> "Stopped. Sections already saved are kept."
-                            else -> out.getString(TrailDownloads.KEY_MESSAGE) ?: "Trail download finished."
-                        }.takeIf { running == null && waiting.isEmpty() } ?: next.trailPrefetch,
-                    )
-                }
-                next
-            }
-            if (justFinished.isNotEmpty()) refreshOfflineSize()
-        }
-    }
-
-    /**
-     * How much of [bounds] has trail data in the offline store for the current mode, as
-     * (sections saved, sections needed) — the same sections [prefetchTrailsFor] would fetch.
-     * Map tiles and trail data download separately, so an area can be "downloaded" on the
-     * map and still have no trails; this is what the Offline screen shows for each area.
-     */
-    suspend fun trailCoverage(bounds: ViewBounds): Pair<Int, Int> = withContext(Dispatchers.IO) {
-        val mtb = _state.value.mode == MapMode.MTB
-        val radius = prefetchRadius()
-        val circles = coverCircles(bounds, prefetchStep()).circles
-        circles.count { overpass.hasSavedArea(it, radius, mtb) } to circles.size
-    }
-
-    /** Recount the offline trail store; the Offline screen calls this when it opens. */
+    /** Recount the old per-region trail downloads; the Offline screen calls this when it opens. */
     fun refreshOfflineSize() = viewModelScope.launch {
         val bytes = withContext(Dispatchers.IO) { overpass.durableBytes() }
         _state.update { it.copy(offlineTrailBytes = bytes) }
     }
 
-    /** Delete every downloaded trail area. Tiles are managed separately, by OfflinePacks. */
+    /** Delete the old per-region trail downloads; state packs hold those trails now. */
     fun clearOfflineTrails() = viewModelScope.launch {
         withContext(Dispatchers.IO) { overpass.clearDurable() }
-        _state.update { it.copy(offlineTrailBytes = 0L, trailPrefetch = "Offline trail data cleared") }
+        _state.update { it.copy(offlineTrailBytes = 0L) }
     }
 
     /**
-     * Circle centres covering [b]. A circle of radius r covers a square of side r·√2, so a
-     * grid step a little under that tiles the box with slight overlap and no gaps.
-     */
-    /** Circles covering an offline area, and how many the box would actually have needed. */
-    private class Coverage(val circles: List<GeoPoint>, val needed: Int)
-
-    /**
-     * The largest radius a load in this mode can ask for. Everything about offline sizing is
-     * derived from it, because the cache only serves a request a stored circle contains.
-     */
-    private fun maxRequestRadius(): Int {
-        val s = _state.value
-        return if (s.mode == MapMode.MTB) s.radiusMeters else MAX_AUTO_RADIUS
-    }
-
-    /**
-     * The radius an offline prefetch stores — deliberately larger than anything that will be
-     * requested. Storing circles the same size as the requests looks efficient and is nearly
-     * useless: containment then only holds within `stored * COVER_SLACK` of the exact centre,
-     * so a downloaded area serves a few hundred metres around each tile and fetches everywhere
-     * else. Oversizing buys the margin that makes the tiles actually reachable.
-     */
-    private fun prefetchRadius(): Int = (maxRequestRadius() * PREFETCH_OVERSIZE).toInt()
-
-    /**
-     * Spacing between prefetch tiles, derived from the rule the cache actually applies:
-     * a request of radius `ask` at distance `d` from a stored circle of radius `store` is
-     * served iff `d + ask <= store * (1 + COVER_SLACK)`. The worst point in a square grid cell
-     * is half a diagonal from the nearest centre, so the step must be at most `maxDrift * √2`.
+     * Add the trail packs an offline map area needs, so downloading a region brings its trails
+     * as well as its map. Returns the names of the states added (empty if all were on the phone,
+     * or the list of states hasn't been fetched yet).
      *
-     * The old step of `radius * 1.3` came from the geometry of covering ground with circles,
-     * which is the wrong question — it left 7.4 km of every ALL cell, and 12.4 km of every MTB
-     * cell, closer to no stored centre than the cache would accept.
+     * A state overview only takes the state it is centred on — its box is a rectangle that
+     * clips half a dozen neighbours. A city or the current view takes every state it touches:
+     * a metro on a state line (Kansas City, St. Louis) needs both to load from the phone.
      */
-    private fun prefetchStep(): Double {
-        val maxDrift = prefetchRadius() * (1 + OverpassClient.COVER_SLACK) - maxRequestRadius()
-        return maxDrift * kotlin.math.sqrt(2.0)
+    fun addPackStatesFor(bounds: ViewBounds, overview: Boolean = false): List<String> {
+        val packs = overpass.pack ?: return emptyList()
+        val centre = GeoPoint((bounds.north + bounds.south) / 2, (bounds.east + bounds.west) / 2)
+        val wanted = if (overview) packs.statesAt(centre) else packs.statesIn(bounds.west, bounds.south, bounds.east, bounds.north)
+        val added = wanted.filter { it.slug !in packs.selected.value }.take(MAX_STATES_PER_AREA)
+        if (added.isEmpty()) return emptyList()
+        added.forEach { packs.select(it.slug) }
+        TrailPackWorker.enqueue(getApplication())
+        return added.map { it.name }
     }
 
-    private fun coverCircles(b: ViewBounds, stepMeters: Double): Coverage {
-        val latStep = stepMeters / 111_320.0
-        val midLat = (b.north + b.south) / 2.0
-        val midLon = (b.east + b.west) / 2.0
-        val lonStep = latStep / kotlin.math.cos(Math.toRadians(midLat)).coerceAtLeast(0.1)
-        // Grid centred on the box, not started from its corner: a box smaller than one step
-        // then gets a single circle centred on it, rather than one offset half a step away
-        // that leaves the area you actually care about out near the circle's edge.
-        val rows = maxOf(1, kotlin.math.ceil((b.north - b.south) / latStep).toInt())
-        val cols = maxOf(1, kotlin.math.ceil((b.east - b.west) / lonStep).toInt())
-        val all = ArrayList<GeoPoint>(minOf(rows * cols, MAX_CANDIDATE_CIRCLES))
-        for (row in 0 until rows) {
-            for (col in 0 until cols) {
-                if (all.size >= MAX_CANDIDATE_CIRCLES) break
-                all.add(
-                    GeoPoint(
-                        midLat + (row - (rows - 1) / 2.0) * latStep,
-                        midLon + (col - (cols - 1) / 2.0) * lonStep,
-                    ),
-                )
-            }
+    /** The whole of an offline area loads from the phone's trail packs. */
+    fun areaTrailsOnPhone(bounds: ViewBounds): Boolean {
+        for (i in 0..2) for (j in 0..2) {
+            val p = GeoPoint(bounds.south + (bounds.north - bounds.south) * i / 2, bounds.west + (bounds.east - bounds.west) * j / 2)
+            if (!overpass.packCovers(p)) return false
         }
-        if (all.size <= MAX_PREFETCH_CIRCLES) return Coverage(all, rows * cols)
-
-        // Over budget: keep the circles nearest the middle of the box. Taking them in row
-        // order instead put every one of "Missouri (overview)"'s twelve circles on a single
-        // strip at latitude 36.058 — whose northern edge is 36.274, still south of Missouri's
-        // 36.499 border. The preset downloaded twelve circles of Arkansas and reported
-        // "Trails saved for offline use".
-        val mid = GeoPoint(midLat, midLon)
-        return Coverage(
-            all.sortedBy { Geo.haversineMeters(it, mid) }.take(MAX_PREFETCH_CIRCLES),
-            rows * cols,
-        )
+        return true
     }
 
     /** Manual "Search this area" — fetch trails around the current map viewport center. */
@@ -1236,6 +1093,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         /** "Near the map" on the Trail data screen: within this many degrees of a state's box. */
         private const val NEARBY_DEG = 0.5
 
+        /** A zoomed-out current view can touch many states; only this many are added for it. */
+        private const val MAX_STATES_PER_AREA = 4
+
         /** First-run states and the map's offer take every state this close to the map. */
         private const val DEFAULT_STATES_REACH_M = 25_000.0
 
@@ -1294,18 +1154,6 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
 
         /** How far past the loaded circle the radius chip may reach before it forces a fetch. */
         private const val RADIUS_CHIP_TOLERANCE_M = 500
-
-        /**
-         * Ceiling on circles per offline area. Each is a few megabytes off a shared public API,
-         * so a state-wide box covers what it can and the UI reports how far it got.
-         */
-        private const val MAX_PREFETCH_CIRCLES = 16
-
-        /** How much wider than the largest request an offline circle is stored. */
-        private const val PREFETCH_OVERSIZE = 1.4
-
-        /** Sanity bound while enumerating a box's grid; a US state is a few hundred cells. */
-        private const val MAX_CANDIDATE_CIRCLES = 2000
 
         /** Attempts per load, so a momentary 502/504 from Overpass isn't a dead end. */
         private const val MAX_ATTEMPTS = 2

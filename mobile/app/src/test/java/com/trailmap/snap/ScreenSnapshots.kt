@@ -101,50 +101,37 @@ class ScreenSnapshots {
         OfflineContent(
             ui = Samples.ui.copy(
                 viewBounds = com.trailmap.data.ViewBounds(39.15, 39.05, -94.5, -94.65, 12.0),
-                offlineTrailBytes = 12_900_000L,
-                trailPrefetch = "Trails 6/9",
-                trailPrefetchProgress = 6 to 9,
+                packStates = states.map { it.copy(installed = it.selected) },
             ),
             areas = listOf(
-                OfflineAreaUi(1, "KC Metro 1", 100, true, 18_422, trails = 0 to 4),
+                OfflineAreaUi(1, "KC Metro 1", 100, true, 18_422, trailsOnPhone = true),
                 OfflineAreaUi(2, "Current view 1", 46, false, 1_210),
             ),
             status = "Downloading Current view 1… 46%",
             onBack = {}, onOpenDiagnostics = {}, onDownloadView = {}, onDownloadPreset = {},
-            onRetry = {}, onDelete = {}, onClearTrails = {},
-            presetTrails = mapOf("KC Metro" to (0 to 4), "Lawrence, KS" to (1 to 1)),
+            onRetry = {}, onDelete = {},
+            presetTrails = mapOf("KC Metro" to true, "Lawrence, KS" to true),
         )
     }
 
-    @Test fun offline_get_trails() = shot {
-        Offline(
-            Samples.ui.copy(
-                trailPrefetchProgress = 3 to 9, trailPrefetchArea = "KC Metro", trailQueued = 2,
-                trailQueuedKeys = setOf(com.trailmap.offline.TrailDownloads.keyFor(com.trailmap.data.ViewBounds(39.40, 38.80, -94.30, -94.80, 10.0), false)),
+    /** Leftovers from 0.16.0 and earlier: per-area trail data, an old-style map, a map without its trails. */
+    @Test fun offline_old_data() = shot {
+        OfflineContent(
+            ui = Samples.ui.copy(
+                viewBounds = com.trailmap.data.ViewBounds(39.15, 39.05, -94.5, -94.65, 12.0),
+                offlineTrailBytes = 12_900_000L,
+                packStates = states.filter { it.slug == "missouri" }.map { it.copy(installed = true) },
             ),
+            areas = listOf(
+                OfflineAreaUi(1, "KC Metro 1", 100, true, 18_422, trailsOnPhone = false),
+                OfflineAreaUi(2, "Lawrence, KS 1", 100, true, 70, trailsOnPhone = false, oldStyle = true),
+            ),
+            status = null,
+            onBack = {}, onOpenDiagnostics = {}, onDownloadView = {}, onDownloadPreset = {},
+            onRetry = {}, onDelete = {},
+            presetTrails = mapOf("KC Metro" to false, "Lawrence, KS" to false),
         )
     }
-    @Test fun offline_paused() = shot {
-        Offline(
-            Samples.ui.copy(
-                trailPrefetchArea = "KC Metro",
-                trailPrefetch = "Paused: the connection dropped after 3 of 9 sections. Tap Get trails to carry on; saved sections are kept.",
-            ),
-        )
-    }
-
-    @Composable
-    private fun Offline(ui: TrailsUiState) = OfflineContent(
-        ui = ui.copy(viewBounds = com.trailmap.data.ViewBounds(39.15, 39.05, -94.5, -94.65, 12.0), offlineTrailBytes = 12_900_000L),
-        areas = listOf(
-            OfflineAreaUi(1, "KC Metro 1", 100, true, 18_422, trails = 3 to 9),
-            OfflineAreaUi(2, "Lawrence, KS 1", 100, true, 70, trails = 0 to 1),
-        ),
-        status = null,
-        onBack = {}, onOpenDiagnostics = {}, onDownloadView = {}, onDownloadPreset = {},
-        onRetry = {}, onDelete = {}, onClearTrails = {},
-        presetTrails = mapOf("KC Metro" to (3 to 9), "Lawrence, KS" to (0 to 1)),
-    )
 
     private val states = listOf(
         com.trailmap.ui.PackState("kansas", "Kansas", 2_142_458, selected = true, installed = true, osmTimestamp = "2026-09-25T20:24:36Z", nearby = true),
@@ -163,8 +150,6 @@ class ScreenSnapshots {
             onBack = {}, onAdd = {}, onRemove = {}, onCheck = {},
         )
     }
-
-    @Test fun offline_trail_data() = shot { Offline(Samples.ui.copy(packStates = states)) }
 
     @Test fun map_state_offer() = shot { Map(Samples.ui.copy(packSuggestion = states[2])) }
 

@@ -154,6 +154,9 @@ class TrailPackTest {
         assertEquals(setOf("missouri"), packs.statesAt(kc).map { it.slug }.toSet())
         assertEquals(setOf("kansas", "missouri"), packs.statesAround(kc, 25_000.0).map { it.slug }.toSet())
         assertEquals(setOf("kansas"), packs.statesAround(GeoPoint(38.97, -95.24), 25_000.0).map { it.slug }.toSet())
+        // An offline map of the KC metro box needs both states' trails.
+        assertEquals(setOf("kansas", "missouri"), packs.statesIn(-94.80, 38.80, -94.30, 39.40).map { it.slug }.toSet())
+        assertEquals(setOf("kansas"), packs.statesIn(-95.30, 38.90, -95.15, 38.99).map { it.slug }.toSet()) // Lawrence
     }
 
     /**

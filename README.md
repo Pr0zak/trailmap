@@ -11,7 +11,7 @@ Overpass API directly.
 ## Features
 
 - **Map** (MapLibre GL Native, keyless) with trail polylines **colored by surface** (paved/gravel/dirt),
-  a theme-aware basemap (light OSM / OpenFreeMap dark), zoom-scaled line widths + casing, and a color **legend**.
+  a theme-aware basemap (OpenFreeMap liberty / dark), zoom-scaled line widths + casing, and a color **legend**.
 - **Surface & activity filters** (paved/gravel/dirt · walk/bike/horse), a **min-length** filter, and **name search**.
 - **Trail list + detail** — nearby trails sorted by distance, with an **elevation profile** along the trail
   in riding order (the trail's OSM pieces are chained end to end first).
@@ -25,7 +25,7 @@ Overpass API directly.
 |------|--------|
 | Trails + parks | **OpenStreetMap**: the trail pack (built from [Geofabrik](https://download.geofabrik.de/) extracts by `trailpack/build_pack.py`), else the [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API) (with mirror fallback) |
 | Elevation | **Open-Topo-Data** (`ned10m`), USGS EPQS spot-check |
-| Basemap | OSM raster (light) / [OpenFreeMap](https://openfreemap.org) `dark` (dark mode) |
+| Basemap | [OpenFreeMap](https://openfreemap.org) vector styles: `liberty` (light) / `dark` (dark mode) |
 
 ## Build
 
