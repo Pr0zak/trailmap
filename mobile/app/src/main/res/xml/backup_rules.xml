@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and below. What trailmap keeps from myvitals (server address, access token,
+     recorded GPS tracks) stays on this phone: it is left out of cloud backup. -->
+<full-backup-content>
+    <exclude domain="file" path="myvitals/" />
+</full-backup-content>

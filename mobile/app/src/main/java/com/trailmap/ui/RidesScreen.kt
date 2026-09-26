@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -53,15 +54,28 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RidesScreen(vm: TrailsViewModel, onOpenRide: (String) -> Unit, onBrowseTrails: () -> Unit = {}) {
+fun RidesScreen(
+    vm: TrailsViewModel,
+    onOpenRide: (String) -> Unit,
+    onBrowseTrails: () -> Unit = {},
+    onOpenRecorded: (String) -> Unit = {},
+    onOpenMyVitals: () -> Unit = {},
+) {
     val ui by vm.state.collectAsStateWithLifecycle()
     RidesContent(
         rides = ui.rides,
         onOpenRide = onOpenRide,
         onCreateRide = { vm.createRide(it) },
         onBrowseTrails = onBrowseTrails,
+        ui = ui,
+        onOpenRecorded = onOpenRecorded,
+        onOpenMyVitals = onOpenMyVitals,
+        onSync = vm::syncMyVitals,
     )
 }
+
+/** The Rides tab's two lists: rides you've planned here, and rides you've recorded. */
+internal enum class RidesTab(val label: String) { PLANNED("Planned"), RECORDED("Recorded") }
 
 /** Stateless body of [RidesScreen], so it can be rendered with sample state. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -71,22 +85,54 @@ internal fun RidesContent(
     onOpenRide: (String) -> Unit,
     onCreateRide: (String) -> String,
     onBrowseTrails: () -> Unit = {},
+    ui: TrailsUiState = TrailsUiState(),
+    onOpenRecorded: (String) -> Unit = {},
+    onOpenMyVitals: () -> Unit = {},
+    onSync: () -> Unit = {},
+    initialTab: RidesTab = RidesTab.PLANNED,
 ) {
     var showNewDialog by remember { mutableStateOf(false) }
+    var tab by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(initialTab) }
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("Rides", fontWeight = FontWeight.Bold) })
+            Column {
+                TopAppBar(
+                    title = { Text("Rides", fontWeight = FontWeight.Bold) },
+                    actions = {
+                        // The connection's settings, once there is one; before that the Recorded
+                        // tab itself offers to connect.
+                        if (ui.myVitals.connected) {
+                            androidx.compose.material3.IconButton(onClick = onOpenMyVitals) {
+                                Icon(Icons.Filled.Settings, contentDescription = "myvitals settings")
+                            }
+                        }
+                    },
+                )
+                androidx.compose.material3.PrimaryTabRow(selectedTabIndex = tab.ordinal) {
+                    RidesTab.entries.forEach { t ->
+                        androidx.compose.material3.Tab(
+                            selected = tab == t,
+                            onClick = { tab = t },
+                            text = { Text(t.label) },
+                        )
+                    }
+                }
+            }
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = { showNewDialog = true },
-                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                text = { Text("New ride") },
-            )
+            if (tab == RidesTab.PLANNED) {
+                ExtendedFloatingActionButton(
+                    onClick = { showNewDialog = true },
+                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                    text = { Text("New ride") },
+                )
+            }
         },
     ) { padding ->
-        if (rides.isEmpty()) {
+        if (tab == RidesTab.RECORDED) {
+            RecordedList(ui, onOpenRecorded, onOpenMyVitals, onSync, Modifier.padding(padding))
+        } else if (rides.isEmpty()) {
             Column(
                 Modifier.padding(padding).fillMaxSize().padding(32.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,

@@ -45,6 +45,13 @@ class Prefs(context: Context) {
         sp.edit().putString(KEY_RIDES, json.encodeToString(rides)).apply()
     }
 
+    /** Map layers drawn from your myvitals activity. Ridden trails and conditions default on. */
+    fun layer(name: String, default: Boolean): Boolean = sp.getBoolean("layer_$name", default)
+
+    fun setLayer(name: String, on: Boolean) {
+        sp.edit().putBoolean("layer_$name", on).apply()
+    }
+
     private companion object {
         const val KEY_SAVED = "saved_trail_ids"
         const val KEY_MAP_THEME = "map_theme"

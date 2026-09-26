@@ -19,7 +19,15 @@ import com.trailmap.data.SurfaceType
 import com.trailmap.data.Trail
 import com.trailmap.data.UseType
 import com.trailmap.data.Geo
+import com.trailmap.data.MyVitalsOffer
+import com.trailmap.data.PersonalPace
+import com.trailmap.data.RecordedTrack
+import com.trailmap.data.RideMatchTest
+import com.trailmap.data.TrackIndex
+import com.trailmap.data.TrailStatus
+import com.trailmap.data.TrailVisits
 import com.trailmap.ui.MapMode
+import com.trailmap.ui.MyVitalsUi
 import com.trailmap.ui.TrailsUiState
 import kotlin.math.cos
 import kotlin.math.sin
@@ -108,6 +116,8 @@ object Samples {
         rides = rides,
         loadedCenter = KC,
         loadedRadiusMeters = 16000,
+        // Not connected, and known not to be: the myvitals screen shows its form.
+        myVitals = MyVitalsUi(settingsLoaded = true),
     )
 
     val uiMtb = ui.copy(
@@ -116,6 +126,73 @@ object Samples {
         trails = trails.filter { it.mtbScale != null },
         trailsVersion = 2,
     )
+
+    // --- Your activity (myvitals) --------------------------------------------------------
+    // Made-up recordings laid along the sample trails, a few metres off their lines as a GPS
+    // track would be, so the real matcher finds them. No real track is in here.
+
+    private val now = System.currentTimeMillis()
+    private const val DAY = 24 * 3600 * 1000L
+
+    /** [path] nudged [metres] north, as a recorded track runs beside the mapped line. */
+    private fun beside(path: List<GeoPoint>, metres: Double = 6.0) = path.map { GeoPoint(it.lat + metres / 111_132.0, it.lon) }
+
+    private fun rec(id: String, type: String, name: String?, daysAgo: Double, miles: Double, minutes: Int, vararg legs: List<GeoPoint>) =
+        RecordedTrack(
+            id, type, name, now - (daysAgo * DAY).toLong(), minutes * 60, miles * 1609.344,
+            RideMatchTest.encode(legs.flatMap { beside(it) }),
+        )
+
+    val recorded: List<RecordedTrack> = listOf(
+        rec("strava:1", "ebikeride", "Evening Ride", 2.2, 14.2, 98, trails[0].paths[0], trails[1].paths[0]),
+        rec("strava:2", "ebikeride", "Indian Creek out and back", 12.0, 11.8, 81, trails[3].paths[0].take(24)),
+        rec("fitbit:3", "mountain_biking", "Swope after work", 19.0, 6.1, 67, trails[5].paths[0], trails[6].paths[0]),
+        rec("garmin:4", "walking", null, 31.0, 1.1, 24, trails[9].paths[0]),
+        rec("garmin:5", "cycling", "Indian Creek", 400.0, 17.9, 131, trails[3].paths[0]),
+        rec("garmin:6", "cycling", "Brush Creek spin", 430.0, 8.2, 58, trails[1].paths[0]),
+    )
+
+    private val index = TrackIndex(recorded)
+    val visits: Map<String, TrailVisits> = trails.mapNotNull { t -> index.visits(t)?.let { t.id to it } }.toMap()
+
+    val conditions = listOf(
+        TrailStatus(
+            1, "Swope Park", trails[5].paths[0][0].lat - 0.002, trails[5].paths[0][0].lon - 0.002, "closed", "Rain.",
+            updatedAt = now - 26 * 3600 * 1000L, checkedAt = now - 4 * 60 * 1000L, url = "https://rainoutline.com/",
+        ),
+        TrailStatus(
+            2, "Blue River Park", trails[4].paths[0][0].lat, trails[4].paths[0][0].lon - 0.003, "delayed", "Few wet spots in the back.",
+            updatedAt = now - 3 * 3600 * 1000L, checkedAt = now - 4 * 60 * 1000L,
+        ),
+        TrailStatus(
+            3, "Kessler Park", trails[7].paths[0][0].lat + 0.002, trails[7].paths[0][0].lon, "open", null,
+            updatedAt = now - 50 * 3600 * 1000L, checkedAt = now - 4 * 60 * 1000L,
+        ),
+    )
+
+    private val youFields = { base: TrailsUiState ->
+        base.copy(
+            myVitals = MyVitalsUi(
+                settingsLoaded = true, connected = true, url = "http://myvitals.local:8000",
+                lastSync = now - 5 * 60 * 1000L, lastConditionsSync = now - 4 * 60 * 1000L,
+            ),
+            recorded = recorded,
+            visits = visits.filterKeys { id -> base.trails.any { it.id == id } },
+            visitsVersion = 1,
+            conditions = conditions,
+            pace = PersonalPace.from(recorded, now),
+        )
+    }
+
+    /** [ui] with myvitals connected. */
+    val uiYou: TrailsUiState = youFields(ui)
+    val uiMtbYou: TrailsUiState = youFields(uiMtb)
+
+    /** What the myvitals app's "Send to trailmap" hands over: the dashboard's address, a made-up key. */
+    val myVitalsOffer = MyVitalsOffer("http://myvitals.local:8080", "not-a-real-access-key-0000", id = 1)
+
+    /** ...and the same connection [uiYou] already uses. */
+    val myVitalsOfferSame = MyVitalsOffer("http://myvitals.local:8000/", "not-a-real-access-key-0000", id = 2)
 
     val diagLines = listOf(
         "21:31:07.412  map      drew 142 trails, 612 KB in 88 ms",
@@ -134,7 +211,15 @@ object Samples {
  * grey roads and the sample trails drawn in their surface colors (horse trails in purple).
  */
 @Composable
-fun FauxMap(trails: List<Trail>, dark: Boolean = false, modifier: Modifier = Modifier.fillMaxSize()) {
+fun FauxMap(
+    trails: List<Trail>,
+    dark: Boolean = false,
+    modifier: Modifier = Modifier.fillMaxSize(),
+    ridden: List<List<GeoPoint>> = emptyList(),
+    /** A recorded activity drawn on its own, as "Show on map" does. */
+    tracks: List<List<GeoPoint>> = emptyList(),
+    heads: List<TrailStatus> = emptyList(),
+) {
     val bg = if (dark) Color(0xFF1D2124) else Color(0xFFF1EEE6)
     val road = if (dark) Color(0xFF3A4046) else Color(0xFFFFFFFF)
     val park = if (dark) Color(0xFF203326) else Color(0xFFD4E8C8)
@@ -163,6 +248,15 @@ fun FauxMap(trails: List<Trail>, dark: Boolean = false, modifier: Modifier = Mod
             (0.08f + 0.84f * ((p.lon - w) / (e - w)).toFloat()) * size.width,
             (0.12f + 0.76f * (1 - ((p.lat - s) / (n - s)).toFloat())) * size.height,
         )
+        val you = Color(if (dark) 0xFF82B1FF else 0xFF2962FF)
+        fun line(path: List<GeoPoint>) = Path().apply {
+            moveTo(pt(path[0]).x, pt(path[0]).y)
+            path.drop(1).forEach { lineTo(pt(it).x, pt(it).y) }
+        }
+        // As the real map: ridden stretches glow under the trail lines.
+        for (path in ridden) if (path.size >= 2) {
+            drawPath(line(path), you.copy(alpha = if (dark) 0.5f else 0.42f), style = Stroke(width = 24f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+        }
         for (t in trails) for ((i, path) in t.paths.withIndex()) {
             val p = Path().apply {
                 moveTo(pt(path[0]).x, pt(path[0]).y)
@@ -172,6 +266,22 @@ fun FauxMap(trails: List<Trail>, dark: Boolean = false, modifier: Modifier = Mod
             val color = if (t.horseTrailPaths.getOrElse(i) { false }) Color(if (dark) 0xFFCE93D8 else 0xFF7B1FA2) else surfaceLine(t.surface, dark)
             drawPath(p, Color(0x55000000), style = Stroke(width = 12f, cap = StrokeCap.Round, join = StrokeJoin.Round))
             drawPath(p, color, style = Stroke(width = 7f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+        }
+        // A recorded activity shown on its own: bold, over the trails it used.
+        for (path in tracks) if (path.size >= 2) {
+            drawPath(line(path), if (dark) Color(0xFF101418) else Color.White, style = Stroke(width = 16f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            drawPath(line(path), you, style = Stroke(width = 9f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+        }
+        for (h in heads) {
+            val at = h.point ?: continue
+            val c = when (h.condition) {
+                com.trailmap.data.TrailCondition.OPEN -> Color(0xFF2E7D32)
+                com.trailmap.data.TrailCondition.DELAYED -> Color(0xFF8D5A00)
+                com.trailmap.data.TrailCondition.CLOSED -> Color(0xFFC62828)
+                com.trailmap.data.TrailCondition.UNKNOWN -> Color(0xFF616161)
+            }
+            drawCircle(if (dark) Color(0xFF101418) else Color.White, 22f, pt(at))
+            drawCircle(c, 17f, pt(at))
         }
     }
 }

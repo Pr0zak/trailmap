@@ -68,6 +68,7 @@ data class FilterActions(
     val setMinLength: (Double) -> Unit = {},
     val setAutoLoad: (Boolean) -> Unit = {},
     val setQuery: (String) -> Unit = {},
+    val setRidden: (RiddenFilter) -> Unit = {},
     val reset: () -> Unit = {},
 ) {
     companion object {
@@ -80,6 +81,7 @@ data class FilterActions(
             setMinLength = { vm.setMinLength(it) },
             setAutoLoad = { vm.setAutoLoadOnPan(it) },
             setQuery = { vm.setQuery(it) },
+            setRidden = vm::setRiddenFilter,
             reset = { vm.resetFilters() },
         )
     }
@@ -102,6 +104,7 @@ internal fun activeFilterCount(ui: TrailsUiState): Int {
     if (ui.selectedUses != d.selectedUses) n++
     if (ui.horseTrails != d.horseTrails) n++
     if (ui.minLengthMiles != d.minLengthMiles) n++
+    if (ui.ridden != d.ridden) n++
     if (!ui.autoLoadOnPan) n++
     return n
 }
@@ -280,6 +283,20 @@ internal fun FilterSheetContent(ui: TrailsUiState, filters: FilterActions, onDon
                     onClick = { filters.setHorseTrails(f) },
                     label = { Text(f.label) },
                 )
+            }
+        }
+
+        // Your rides, matched from myvitals: "Not yet" is the one for finding somewhere new.
+        if (ui.recorded.isNotEmpty()) {
+            SheetLabel("Your rides")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                RiddenFilter.entries.forEach { f ->
+                    FilterChip(
+                        selected = ui.ridden == f,
+                        onClick = { filters.setRidden(f) },
+                        label = { Text(if (f == RiddenFilter.NOT_YET) "Not ridden yet" else f.label) },
+                    )
+                }
             }
         }
 

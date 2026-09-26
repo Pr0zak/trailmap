@@ -67,8 +67,16 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.trailmap.data.DiagLog
+import com.trailmap.data.Polyline
+import com.trailmap.data.RecordedTrack
 import com.trailmap.data.SurfaceType
 import com.trailmap.data.Trail
+import com.trailmap.data.TrailCondition
+import com.trailmap.data.TrailConditions
+import com.trailmap.data.TrailStatus
+import com.trailmap.data.TrailVisits
+import org.maplibre.android.style.layers.CircleLayer
+import org.maplibre.android.style.layers.SymbolLayer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.maplibre.android.camera.CameraPosition
@@ -88,6 +96,18 @@ private const val LAYER_TRAILS = "trails-line"
 private const val LAYER_TRAILS_CASING = "trails-line-casing"
 private const val SRC_HIGHLIGHT = "trail-highlight"
 private const val LAYER_HIGHLIGHT = "trail-highlight-line"
+// Your activity from myvitals: every recorded track, the ridden stretches of trails, one
+// recorded activity drawn on its own, and trailheads with their open/closed state.
+private const val SRC_TRACKS = "my-tracks"
+private const val LAYER_TRACKS = "my-tracks-line"
+private const val SRC_RIDDEN = "ridden"
+private const val LAYER_RIDDEN = "ridden-glow"
+private const val SRC_TRACK_HL = "track-highlight"
+private const val LAYER_TRACK_HL = "track-highlight-line"
+private const val LAYER_TRACK_HL_CASING = "track-highlight-casing"
+private const val SRC_CONDITIONS = "conditions"
+private const val LAYER_CONDITIONS = "conditions-dot"
+private const val LAYER_CONDITION_LABELS = "conditions-label"
 private const val EMPTY_FC = """{"type":"FeatureCollection","features":[]}"""
 // OpenFreeMap vector styles: keyless and unmetered, and fine to download for offline use. CARTO's
 // dark_all raster (dark, before 0.15.0) started answering every tile with "API KEY REQUIRED"; OSM's
@@ -97,7 +117,12 @@ private const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
 @SuppressLint("MissingPermission")
 @Composable
-fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline: () -> Unit) {
+fun MapScreen(
+    vm: TrailsViewModel,
+    onOpenTrail: (String) -> Unit,
+    onOpenOffline: () -> Unit,
+    onOpenMyVitals: () -> Unit = {},
+) {
     val ui by vm.state.collectAsStateWithLifecycle()
     val dark = when (ui.mapTheme) {
         MapTheme.SYSTEM -> isSystemInDarkTheme()
@@ -179,6 +204,41 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
         style.getSourceAs<GeoJsonSource>(SRC_HIGHLIGHT)?.setGeoJson(fc)
     }
 
+    // Your recorded tracks, all of them, when the layer is on. A few hundred simplified tracks
+    // are ~80k points; decoding and serialising them is done off the main thread, once per
+    // sync or toggle.
+    LaunchedEffect(ui.recorded, ui.showTracks, styleRef.value) {
+        val style = styleRef.value ?: return@LaunchedEffect
+        val fc = if (!ui.showTracks || ui.recorded.isEmpty()) EMPTY_FC else withContext(Dispatchers.Default) { tracksFc(ui.recorded) }
+        if (styleRef.value !== style) return@LaunchedEffect
+        style.getSourceAs<GeoJsonSource>(SRC_TRACKS)?.setGeoJson(fc)
+    }
+
+    // The ridden stretches of the trails on screen, as a glow under their lines.
+    LaunchedEffect(ui.filterKey, ui.visitsVersion, ui.showRidden, styleRef.value) {
+        val style = styleRef.value ?: return@LaunchedEffect
+        val fc = if (!ui.showRidden || ui.visits.isEmpty()) EMPTY_FC else withContext(Dispatchers.Default) {
+            pathsFc(ui.filtered.mapNotNull { ui.visits[it.id]?.riddenPaths }.flatten())
+        }
+        if (styleRef.value !== style) return@LaunchedEffect
+        style.getSourceAs<GeoJsonSource>(SRC_RIDDEN)?.setGeoJson(fc)
+    }
+
+    // One recorded activity, bold, when "Show on map" was chosen for it.
+    LaunchedEffect(ui.highlightedTrackId, ui.recorded, styleRef.value) {
+        val style = styleRef.value ?: return@LaunchedEffect
+        val track = ui.highlightedTrackId?.let { ui.recordedById[it] }
+        val fc = if (track == null) EMPTY_FC else withContext(Dispatchers.Default) { pathsFc(listOf(Polyline.decode(track.polyline))) }
+        style.getSourceAs<GeoJsonSource>(SRC_TRACK_HL)?.setGeoJson(fc)
+    }
+
+    // Trailheads on the status board, coloured open / closed.
+    LaunchedEffect(ui.conditions, ui.showConditions, styleRef.value) {
+        val style = styleRef.value ?: return@LaunchedEffect
+        val fc = if (!ui.showConditions) EMPTY_FC else conditionsFc(ui.conditions)
+        style.getSourceAs<GeoJsonSource>(SRC_CONDITIONS)?.setGeoJson(fc)
+    }
+
     // One-shot: an explicit recenter (my-location, or a tapped trail-system header).
     LaunchedEffect(ui.focusTarget, styleRef.value) {
         val target = ui.focusTarget ?: return@LaunchedEffect
@@ -236,6 +296,12 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
                             val pt = map.projection.toScreenLocation(ll)
                             val tol = 30f
                             val box = android.graphics.RectF(pt.x - tol, pt.y - tol, pt.x + tol, pt.y + tol)
+                            // A trailhead dot sits on top of the trails around it, so it wins.
+                            val head = map.queryRenderedFeatures(box, LAYER_CONDITIONS).firstOrNull()
+                            if (head != null && head.hasProperty("id")) {
+                                vm.selectCondition(head.getNumberProperty("id").toLong())
+                                return@addOnMapClickListener true
+                            }
                             val f = map.queryRenderedFeatures(box, LAYER_TRAILS).firstOrNull()
                             val id = f?.takeIf { it.hasProperty("id") }?.getStringProperty("id")
                             if (id != null) {
@@ -274,6 +340,10 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
             onClearRide = vm::clearRideHighlight,
             onGetPackState = vm::addPackState,
             onDismissPackSuggestion = vm::dismissPackSuggestion,
+            selectedCondition = ui.selectedConditionId?.let { id -> ui.conditions.firstOrNull { it.id == id } },
+            onSetLayer = vm::setLayer,
+            onOpenMyVitals = onOpenMyVitals,
+            onClearTrack = vm::clearTrackHighlight,
         )
     }
 }
@@ -300,6 +370,10 @@ internal fun BoxScope.MapOverlays(
     onClearRide: () -> Unit = {},
     onGetPackState: (String) -> Unit = {},
     onDismissPackSuggestion: () -> Unit = {},
+    selectedCondition: TrailStatus? = null,
+    onSetLayer: (YouLayer, Boolean) -> Unit = { _, _ -> },
+    onOpenMyVitals: () -> Unit = {},
+    onClearTrack: () -> Unit = {},
 ) {
     var showAddToRide by remember { mutableStateOf(false) }
         var showFilters by remember { mutableStateOf(false) }
@@ -368,6 +442,35 @@ internal fun BoxScope.MapOverlays(
                 }
             }
 
+            // "Show on map" for a recorded activity: which one, and a way to put it away.
+            ui.highlightedTrackId?.let { ui.recordedById[it] }?.let { track ->
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shadowElevation = 2.dp,
+                ) {
+                    Row(Modifier.padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(track.kind.icon, contentDescription = null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                        Spacer(Modifier.size(6.dp))
+                        Text(
+                            listOfNotNull(
+                                track.name ?: track.kind.label,
+                                shortDate(track.start),
+                                track.distanceMiles?.let { "%.1f mi".format(it) },
+                            ).joinToString(" · "),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        IconButton(onClick = onClearTrack) {
+                            Icon(Icons.Filled.Close, contentDescription = "Stop showing this activity")
+                        }
+                    }
+                }
+            }
+
             // Over a state whose trails aren't on the phone: every load here is a public
             // Overpass query, so offer the state's pack — a tap, and it downloads in the
             // background.
@@ -427,9 +530,13 @@ internal fun BoxScope.MapOverlays(
                 verticalAlignment = Alignment.Bottom,
             ) {
                 // color key — difficulty (MTB) or surface (ALL)
-                MapLegend(mode = ui.mode, dark = dark)
+                MapLegend(
+                    mode = ui.mode, dark = dark,
+                    ridden = ui.showRidden && ui.visits.isNotEmpty(),
+                    tracks = ui.showTracks && ui.recorded.isNotEmpty(),
+                )
                 Spacer(Modifier.weight(1f))
-                MapButtons(ui, onSetTheme, onOpenOffline, onRecenter)
+                MapButtons(ui, onSetTheme, onOpenOffline, onRecenter, onSetLayer, onOpenMyVitals)
             }
             // peek card — only for the trail the user tapped (nothing auto-selected at startup)
             if (selectedTrail != null) {
@@ -439,6 +546,14 @@ internal fun BoxScope.MapOverlays(
                     onDetails = { onOpenTrail(selectedTrail.id) },
                     onToggleSaved = { onToggleSaved(selectedTrail.id) },
                     onAddToRide = { showAddToRide = true },
+                    onClose = onClearSelection,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                    visits = ui.visits[selectedTrail.id],
+                    condition = remember(selectedTrail, ui.conditions) { TrailConditions.forTrail(selectedTrail, ui.conditions) },
+                )
+            } else if (selectedCondition != null) {
+                ConditionPeekCard(
+                    status = selectedCondition,
                     onClose = onClearSelection,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
                 )
@@ -455,13 +570,15 @@ internal fun BoxScope.MapOverlays(
         }
     }
 
-/** Right-edge controls: theme menu, offline download, my-location. */
+/** Right-edge controls: layers menu (theme + your activity), offline download, my-location. */
 @Composable
 private fun MapButtons(
     ui: TrailsUiState,
     onSetTheme: (MapTheme) -> Unit,
     onOpenOffline: () -> Unit,
     onRecenter: () -> Unit,
+    onSetLayer: (YouLayer, Boolean) -> Unit,
+    onOpenMyVitals: () -> Unit,
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -475,7 +592,7 @@ private fun MapButtons(
                 onClick = { layersOpen = true },
                 containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
             ) {
-                Icon(Icons.Filled.Layers, contentDescription = "Theme")
+                Icon(Icons.Filled.Layers, contentDescription = "Layers and theme")
             }
             DropdownMenu(expanded = layersOpen, onDismissRequest = { layersOpen = false }) {
                 Text(
@@ -497,6 +614,43 @@ private fun MapButtons(
                         onClick = {
                             onSetTheme(theme)
                             layersOpen = false
+                        },
+                    )
+                }
+                androidx.compose.material3.HorizontalDivider()
+                Text(
+                    "Your activity",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+                if (ui.myVitals.connected) {
+                    YouLayer.entries.forEach { layer ->
+                        val on = when (layer) {
+                            YouLayer.RIDDEN -> ui.showRidden
+                            YouLayer.TRACKS -> ui.showTracks
+                            YouLayer.CONDITIONS -> ui.showConditions
+                        }
+                        DropdownMenuItem(
+                            text = { Text(layer.label) },
+                            leadingIcon = { androidx.compose.material3.Checkbox(checked = on, onCheckedChange = null) },
+                            // Stays open, so several layers can be flipped in one go.
+                            onClick = { onSetLayer(layer, !on) },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text("myvitals…") },
+                        onClick = {
+                            layersOpen = false
+                            onOpenMyVitals()
+                        },
+                    )
+                } else {
+                    DropdownMenuItem(
+                        text = { Text("Connect myvitals…") },
+                        onClick = {
+                            layersOpen = false
+                            onOpenMyVitals()
                         },
                     )
                 }
@@ -543,37 +697,77 @@ private fun StatusPill(text: String) {
  * darker so their white labels stay readable.
  */
 @Composable
-private fun MapLegend(mode: MapMode, dark: Boolean, modifier: Modifier = Modifier) {
+private fun MapLegend(
+    mode: MapMode,
+    dark: Boolean,
+    modifier: Modifier = Modifier,
+    ridden: Boolean = false,
+    tracks: Boolean = false,
+) {
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.92f),
         shadowElevation = 2.dp,
     ) {
-        if (mode == MapMode.MTB) {
-            Row(
-                Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                MTB_LINE_COLORS.forEachIndexed { scale, (light, darkColor) ->
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Swatch(Color((if (dark) darkColor else light).toInt()), 22)
-                        Text("S$scale", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+        Column {
+            LegendColors(mode, dark)
+            // Your layers get a second line, so the colour key above keeps its width.
+            if (ridden || tracks) {
+                Row(
+                    Modifier.padding(start = 10.dp, end = 10.dp, bottom = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (ridden) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                Modifier.width(18.dp).height(10.dp).clip(RoundedCornerShape(50))
+                                    .background(youColor(dark).copy(alpha = 0.45f)),
+                                contentAlignment = Alignment.Center,
+                            ) { Swatch(MaterialTheme.colorScheme.onSurfaceVariant, 12) }
+                            Spacer(Modifier.size(4.dp))
+                            Text("Ridden", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                    if (tracks) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.width(16.dp).height(2.dp).clip(RoundedCornerShape(50)).background(youColor(dark)))
+                            Spacer(Modifier.size(4.dp))
+                            Text("My tracks", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+                        }
                     }
                 }
             }
-        } else {
-            Row(
-                Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                (SURFACE_LINE_COLORS + ("Horse trail" to HORSE_LINE_COLOR)).forEach { (label, colors) ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Swatch(Color((if (dark) colors.second else colors.first).toInt()), 14)
-                        Spacer(Modifier.size(4.dp))
-                        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
-                    }
+        }
+    }
+}
+
+@Composable
+private fun LegendColors(mode: MapMode, dark: Boolean) {
+    if (mode == MapMode.MTB) {
+        Row(
+            Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            MTB_LINE_COLORS.forEachIndexed { scale, (light, darkColor) ->
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Swatch(Color((if (dark) darkColor else light).toInt()), 22)
+                    Text("S$scale", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+                }
+            }
+        }
+    } else {
+        Row(
+            Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            (SURFACE_LINE_COLORS + ("Horse trail" to HORSE_LINE_COLOR)).forEach { (label, colors) ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Swatch(Color((if (dark) colors.second else colors.first).toInt()), 14)
+                    Spacer(Modifier.size(4.dp))
+                    Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
                 }
             }
         }
@@ -622,6 +816,8 @@ private fun TrailPeekCard(
     onAddToRide: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier,
+    visits: TrailVisits? = null,
+    condition: TrailStatus? = null,
 ) {
     Surface(
         modifier = modifier,
@@ -653,9 +849,11 @@ private fun TrailPeekCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 SurfaceBadge(trail.surface)
                 MtbBadge(trail.mtbScale, Modifier.padding(start = 6.dp))
+                if (condition != null) ConditionChip(condition, Modifier.padding(start = 6.dp))
                 Spacer(Modifier.size(8.dp))
                 UseIcons(trail.uses, size = 16)
             }
+            VisitLine(visits, Modifier.padding(top = 6.dp))
             Spacer(Modifier.size(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                 PeekStat("%.1f mi".format(trail.lengthMiles), "length")
@@ -674,16 +872,91 @@ private fun TrailPeekCard(
     }
 }
 
+/** The card for a tapped trailhead: open or closed, the board's message, and how fresh it is. */
+@Composable
+private fun ConditionPeekCard(status: TrailStatus, onClose: () -> Unit, modifier: Modifier) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        shadowElevation = 8.dp,
+    ) {
+        Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    status.name,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = onClose) {
+                    Icon(Icons.Filled.Close, contentDescription = "Dismiss")
+                }
+            }
+            ConditionChip(status)
+            status.comment?.let {
+                Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 8.dp, end = 8.dp))
+            }
+            Text(
+                listOfNotNull(
+                    status.updatedAt?.let { "Posted ${ago(it)}" },
+                    status.checkedAt?.let { "checked ${ago(it)}" },
+                ).joinToString(" · ").ifEmpty { "No reading yet" },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            // Only an http(s) page: the address comes from the server.
+            status.link?.let { url ->
+                TextButton(
+                    onClick = {
+                        runCatching {
+                            context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+                        }
+                    },
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 0.dp),
+                ) { Text("Open on RainoutLine") }
+            }
+        }
+    }
+}
+
 @Composable
 private fun PeekStat(value: String, label: String) = Column {
     Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
     Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
-/** Add the highlight glow + casing + colored line layers (bottom→top order). */
+/**
+ * Add the trail layers, bottom to top: your tracks, the selection's highlight glow, the ridden
+ * glow, casing, the coloured line, one recorded activity drawn bold, and trailhead dots.
+ */
 private fun applyTrailLayers(style: Style, dark: Boolean) {
+    val you = (if (dark) YOU_LINE_COLOR.second else YOU_LINE_COLOR.first).toInt()
     style.addSource(GeoJsonSource(SRC_TRAILS, EMPTY_FC))
     style.addSource(GeoJsonSource(SRC_HIGHLIGHT, EMPTY_FC))
+    style.addSource(GeoJsonSource(SRC_TRACKS, EMPTY_FC))
+    style.addSource(GeoJsonSource(SRC_RIDDEN, EMPTY_FC))
+    style.addSource(GeoJsonSource(SRC_TRACK_HL, EMPTY_FC))
+    style.addSource(GeoJsonSource(SRC_CONDITIONS, EMPTY_FC))
+    // Every recorded track, thin and under everything: where you've been, trail or not.
+    style.addLayer(
+        LineLayer(LAYER_TRACKS, SRC_TRACKS).withProperties(
+            PropertyFactory.lineWidth(
+                Expression.interpolate(
+                    Expression.linear(), Expression.zoom(),
+                    Expression.stop(10, 1.0f), Expression.stop(14, 2.0f), Expression.stop(17, 3.5f),
+                ),
+            ),
+            PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+            PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
+            PropertyFactory.lineColor(you),
+            PropertyFactory.lineOpacity(0.55f),
+        ),
+    )
     // Highlight glow for the selected trail — widest, drawn underneath everything so it
     // halos around the colored line. Bright yellow reads on both light + dark basemaps.
     style.addLayer(
@@ -692,6 +965,17 @@ private fun applyTrailLayers(style: Style, dark: Boolean) {
             PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
             PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
             PropertyFactory.lineColor(0xF0FFD54F.toInt()),
+        ),
+    )
+    // Trails you've ridden glow blue underneath, so the surface colour still reads and the
+    // glow shows at every zoom (a stripe inside a 1 px line would vanish when zoomed out).
+    style.addLayer(
+        LineLayer(LAYER_RIDDEN, SRC_RIDDEN).withProperties(
+            PropertyFactory.lineWidth(lineWidthExpr(5f)),
+            PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+            PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
+            PropertyFactory.lineColor(you),
+            PropertyFactory.lineOpacity(if (dark) 0.5f else 0.42f),
         ),
     )
     // Casing = a wider line drawn underneath the colored line. A dark outline on the light
@@ -713,7 +997,63 @@ private fun applyTrailLayers(style: Style, dark: Boolean) {
             PropertyFactory.lineColor(trailColorExpr(dark)),
         ),
     )
+    // One recorded activity, on top of the trails it used.
+    style.addLayer(
+        LineLayer(LAYER_TRACK_HL_CASING, SRC_TRACK_HL).withProperties(
+            PropertyFactory.lineWidth(lineWidthExpr(4f)),
+            PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+            PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
+            PropertyFactory.lineColor(if (dark) 0xFF101418.toInt() else 0xFFFFFFFF.toInt()),
+        ),
+    )
+    style.addLayer(
+        LineLayer(LAYER_TRACK_HL, SRC_TRACK_HL).withProperties(
+            PropertyFactory.lineWidth(lineWidthExpr(1.5f)),
+            PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+            PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
+            PropertyFactory.lineColor(you),
+        ),
+    )
+    // Trailheads on the status board: a dot in the condition's colour, labelled close up.
+    style.addLayer(
+        CircleLayer(LAYER_CONDITIONS, SRC_CONDITIONS).withProperties(
+            PropertyFactory.circleRadius(
+                Expression.interpolate(
+                    Expression.linear(), Expression.zoom(),
+                    Expression.stop(8, 4.0f), Expression.stop(12, 7.0f), Expression.stop(16, 9.0f),
+                ),
+            ),
+            PropertyFactory.circleColor(conditionColorExpr()),
+            PropertyFactory.circleStrokeColor(if (dark) 0xFF101418.toInt() else 0xFFFFFFFF.toInt()),
+            PropertyFactory.circleStrokeWidth(2f),
+        ),
+    )
+    style.addLayer(
+        SymbolLayer(LAYER_CONDITION_LABELS, SRC_CONDITIONS).withProperties(
+            PropertyFactory.textField(Expression.get("label")),
+            PropertyFactory.textFont(arrayOf("Noto Sans Bold")),
+            PropertyFactory.textSize(12f),
+            PropertyFactory.textAnchor(Property.TEXT_ANCHOR_TOP),
+            PropertyFactory.textOffset(arrayOf(0f, 0.9f)),
+            PropertyFactory.textColor(conditionColorExpr()),
+            PropertyFactory.textHaloColor(if (dark) 0xFF101418.toInt() else 0xFFFFFFFF.toInt()),
+            PropertyFactory.textHaloWidth(1.5f),
+        ).also { it.minZoom = 11f },
+    )
 }
+
+/** Condition colour per trailhead, from the feature's "condition" (a [TrailCondition] name). */
+private fun conditionColorExpr(): Expression = Expression.match(
+    Expression.get("condition"),
+    *TrailCondition.entries.flatMap {
+        listOf(Expression.literal(it.name), Expression.color(it.color.toArgbInt()))
+    }.toTypedArray(),
+    Expression.color(TrailCondition.UNKNOWN.color.toArgbInt()),
+)
+
+private fun Color.toArgbInt(): Int = android.graphics.Color.argb(
+    (alpha * 255).toInt(), (red * 255).toInt(), (green * 255).toInt(), (blue * 255).toInt(),
+)
 
 // Zoom-interpolated stroke width: thin when zoomed out (so dense trail networks don't
 // merge into blobs), wider when zoomed in. [extra] widens it (casing peeks out; highlight glows).
@@ -805,6 +1145,48 @@ private fun trailsFc(trails: List<Trail>, horse: Boolean = false): String {
             }
             sb.append("]}}")
         }
+    }
+    sb.append("]}")
+    return sb.toString()
+}
+
+/** Plain lines with no properties — the ridden stretches and a single highlighted track. */
+private fun pathsFc(paths: List<List<com.trailmap.data.GeoPoint>>): String {
+    val sb = StringBuilder(1 shl 14)
+    sb.append("{\"type\":\"FeatureCollection\",\"features\":[")
+    var first = true
+    for (path in paths) {
+        if (path.size < 2) continue
+        if (!first) sb.append(',')
+        first = false
+        sb.append("{\"type\":\"Feature\",\"properties\":{},\"geometry\":{\"type\":\"LineString\",\"coordinates\":[")
+        for (i in path.indices) {
+            if (i > 0) sb.append(',')
+            sb.append('[').append(round5(path[i].lon)).append(',').append(round5(path[i].lat)).append(']')
+        }
+        sb.append("]}}")
+    }
+    sb.append("]}")
+    return sb.toString()
+}
+
+/** Every recorded track as a line. Call off the main thread: this decodes all of them. */
+private fun tracksFc(tracks: List<RecordedTrack>): String =
+    pathsFc(tracks.filter { it.kind.ride || it.kind.onFoot }.map { Polyline.decode(it.polyline) })
+
+/** Trailheads with a pinned location, as points carrying id, condition and label. */
+private fun conditionsFc(statuses: List<TrailStatus>): String {
+    val sb = StringBuilder("{\"type\":\"FeatureCollection\",\"features\":[")
+    var first = true
+    for (s in statuses) {
+        val p = s.point ?: continue
+        if (!first) sb.append(',')
+        first = false
+        sb.append("{\"type\":\"Feature\",\"properties\":{\"id\":").append(s.id)
+        sb.append(",\"condition\":\"").append(s.condition.name).append("\",\"label\":")
+        appendJsonString(sb, s.condition.label)
+        sb.append("},\"geometry\":{\"type\":\"Point\",\"coordinates\":[")
+        sb.append(round5(p.lon)).append(',').append(round5(p.lat)).append("]}}")
     }
     sb.append("]}")
     return sb.toString()

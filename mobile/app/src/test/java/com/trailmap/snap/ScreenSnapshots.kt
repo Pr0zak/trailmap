@@ -9,6 +9,7 @@ import app.cash.paparazzi.Paparazzi
 import com.trailmap.ui.DiagnosticsContent
 import com.trailmap.ui.FilterActions
 import com.trailmap.ui.FilterSheetContent
+import com.trailmap.data.Polyline
 import com.trailmap.data.SurfaceType
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -38,12 +39,18 @@ class ScreenSnapshots {
 
     @Composable
     private fun Map(ui: TrailsUiState, selected: String? = null, dark: Boolean = false) = Box(Modifier.fillMaxSize()) {
-        FauxMap(ui.filtered, dark = dark)
+        FauxMap(
+            ui.filtered, dark = dark,
+            ridden = if (ui.showRidden) ui.filtered.mapNotNull { ui.visits[it.id]?.riddenPaths }.flatten() else emptyList(),
+            tracks = ui.highlightedTrackId?.let { id -> ui.recordedById[id] }?.let { listOf(Polyline.decode(it.polyline)) }.orEmpty(),
+            heads = if (ui.showConditions) ui.conditions else emptyList(),
+        )
         MapOverlays(
             ui = ui, dark = dark,
             selectedTrail = selected?.let { id -> ui.trails.first { it.id == id } },
             filters = FilterActions(), onSearchThisArea = {}, onOpenTrail = {}, onClearSelection = {},
             onSetTheme = {}, onOpenOffline = {}, onRecenter = {},
+            selectedCondition = ui.selectedConditionId?.let { id -> ui.conditions.first { it.id == id } },
         )
     }
 
@@ -152,6 +159,129 @@ class ScreenSnapshots {
     }
 
     @Test fun map_state_offer() = shot { Map(Samples.ui.copy(packSuggestion = states[2])) }
+
+    // --- Your activity, from myvitals ---------------------------------------------------------
+
+    @Test fun map_you() = shot { Map(Samples.uiYou) }
+    @Test fun map_you_dark() = shot(dark = true) { Map(Samples.uiYou, dark = true) }
+    @Test fun map_you_selected() = shot { Map(Samples.uiYou, selected = "name_trolley_track_trail") }
+    @Test fun map_condition() = shot { Map(Samples.uiYou.copy(selectedConditionId = 1)) }
+    @Test fun map_track() = shot { Map(Samples.uiYou.copy(highlightedTrackId = "strava:1", showRidden = false)) }
+
+    @Test fun list_you() = shot { List(Samples.uiYou.copy(sort = com.trailmap.ui.TrailSort.LAST_RIDDEN)) }
+    @Test fun list_mtb_you() = shot { List(Samples.uiMtbYou) }
+
+    @Test fun filter_sheet_you() = shot {
+        Box(Modifier.fillMaxSize()) {
+            FauxMap(Samples.uiYou.filtered)
+            Box(Modifier.fillMaxSize().background(Color(0x66000000)))
+            Surface(
+                Modifier.align(Alignment.BottomCenter),
+                shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+            ) {
+                FilterSheetContent(Samples.uiYou.copy(ridden = com.trailmap.ui.RiddenFilter.NOT_YET), FilterActions(), onDone = {})
+            }
+        }
+    }
+
+    @Composable
+    private fun Detail(id: String, ui: TrailsUiState = Samples.uiYou) = TrailDetailContent(
+        trail = ui.trails.first { it.id == id }, profile = Samples.profile, ui = ui,
+        onBack = {}, onToggleSaved = {}, onCreateRide = { _, _ -> }, onAddToRide = { _, _ -> },
+        visits = ui.visits[id],
+    )
+
+    /** Part-ridden: coverage, the ride list, and the time at your own pace. */
+    @Test fun detail_you() = shot { Detail("name_indian_creek_trail") }
+    @Test fun detail_you_mtb() = shot { Detail("name_rocky_ridge", Samples.uiMtbYou) }
+    @Test fun detail_not_ridden() = shot { Detail("name_line_creek_trail") }
+
+    @Test fun rides_recorded() = shot {
+        RidesContent(Samples.rides, onOpenRide = {}, onCreateRide = { "" }, ui = Samples.uiYou, initialTab = com.trailmap.ui.RidesTab.RECORDED)
+    }
+    @Test fun rides_recorded_connect() = shot {
+        RidesContent(Samples.rides, onOpenRide = {}, onCreateRide = { "" }, ui = Samples.ui, initialTab = com.trailmap.ui.RidesTab.RECORDED)
+    }
+
+    @Test fun recorded_ride() = shot {
+        val track = Samples.recorded[0]
+        com.trailmap.ui.RecordedRideContent(
+            track = track,
+            trails = com.trailmap.ui.RecordedTrails.Ready(
+                com.trailmap.data.TrackIndex(listOf(track)).trailsAlong(track.id, Samples.trails),
+            ),
+            onBack = {}, onOpenTrail = {}, onRetry = {}, onShowOnMap = {}, onSaveAsRide = {},
+        )
+    }
+
+    @Test fun myvitals_connect() = shot {
+        com.trailmap.ui.MyVitalsContent(
+            ui = Samples.ui.copy(
+                myVitals = com.trailmap.ui.MyVitalsUi(
+                    settingsLoaded = true,
+                    url = "http://myvitals.local:8000",
+                    error = "Couldn't reach myvitals.local. Is the phone on the same network as your myvitals server, or on Tailscale?",
+                ),
+            ),
+            onBack = {}, onConnect = { _, _ -> }, onSync = {}, onSetAutoSync = {}, onDisconnect = {},
+            onAcceptOffer = {}, onDismissOffer = {},
+        )
+    }
+    @Test fun myvitals_connected() = shot {
+        com.trailmap.ui.MyVitalsContent(
+            ui = Samples.uiYou, onBack = {}, onConnect = { _, _ -> }, onSync = {}, onSetAutoSync = {}, onDisconnect = {},
+            onAcceptOffer = {}, onDismissOffer = {},
+        )
+    }
+
+    /** The myvitals app sent its connection: the form arrives filled in, waiting for a tap. */
+    @Test fun myvitals_offer() = shot {
+        com.trailmap.ui.MyVitalsContent(
+            ui = Samples.ui.copy(myVitalsOffer = Samples.myVitalsOffer),
+            onBack = {}, onConnect = { _, _ -> }, onSync = {}, onSetAutoSync = {}, onDisconnect = {},
+            onAcceptOffer = {}, onDismissOffer = {},
+        )
+    }
+
+    /** ...and while another connection already works: nothing changes until "Use this". */
+    @Test fun myvitals_offer_connected() = shot {
+        com.trailmap.ui.MyVitalsContent(
+            ui = Samples.uiYou.copy(myVitalsOffer = Samples.myVitalsOffer),
+            onBack = {}, onConnect = { _, _ -> }, onSync = {}, onSetAutoSync = {}, onDisconnect = {},
+            onAcceptOffer = {}, onDismissOffer = {},
+        )
+    }
+
+    /** "Use this" failed: the reason sits in the offer's card, and the Connected card has no "Last try failed". */
+    @Test fun myvitals_offer_error() = shot {
+        com.trailmap.ui.MyVitalsContent(
+            ui = Samples.uiYou.copy(
+                myVitalsOffer = Samples.myVitalsOffer,
+                myVitalsOfferError = "Couldn't reach myvitals.local. Is the phone on the same network as your myvitals server, or on Tailscale?",
+            ),
+            onBack = {}, onConnect = { _, _ -> }, onSync = {}, onSetAutoSync = {}, onDisconnect = {},
+            onAcceptOffer = {}, onDismissOffer = {},
+        )
+    }
+
+    /** The myvitals app sent the connection already in use: a note, nothing to switch. */
+    @Test fun myvitals_offer_current() = shot {
+        com.trailmap.ui.MyVitalsContent(
+            ui = Samples.uiYou.copy(myVitalsOffer = Samples.myVitalsOfferSame, myVitalsOfferCurrent = true),
+            onBack = {}, onConnect = { _, _ -> }, onSync = {}, onSetAutoSync = {}, onDisconnect = {},
+            onAcceptOffer = {}, onDismissOffer = {},
+        )
+    }
+
+    /** Opened by a handoff at a cold start, before the saved connection has been read. */
+    @Test fun myvitals_loading() = shot {
+        com.trailmap.ui.MyVitalsContent(
+            ui = Samples.ui.copy(myVitals = com.trailmap.ui.MyVitalsUi(), myVitalsOffer = Samples.myVitalsOffer),
+            onBack = {}, onConnect = { _, _ -> }, onSync = {}, onSetAutoSync = {}, onDisconnect = {},
+            onAcceptOffer = {}, onDismissOffer = {},
+        )
+    }
 
     @Test fun diagnostics() = shot {
         DiagnosticsContent(Samples.diagLines, onBack = {}, onShare = {}, onClear = {})

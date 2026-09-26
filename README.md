@@ -18,6 +18,19 @@ Overpass API directly.
 - **MTB mode** — mountain-bike trails only (`route=mtb` / `mtb:scale`), a **10/25/40-mile** radius selector,
   IMBA-style **difficulty badges** (S0–S6), difficulty-colored map lines, and trails **clustered into systems**
   named after their enclosing OSM park (e.g. *Kessler Park*, *Swope Park*).
+- **Your rides, from [myvitals](https://github.com/Pr0zak/myvitals)** (optional) — connect a self-hosted
+  myvitals server and trailmap reads your recorded rides and walks with their GPS tracks, then:
+  - marks the **trails you've ridden** (a blue glow on the map, "Ridden 12× · last Jun 16" in the list,
+    coverage and every ride on the trail's page), with a **Not ridden yet** filter and a **Last ridden** sort;
+  - estimates trail times at **your own pace** (bike, e-bike, mountain bike or walking);
+  - draws **your tracks** as a map layer, and shows any recorded ride on the map;
+  - lists your **recorded rides** in the Rides tab, with the trails each one used, and saves one as a planned ride;
+  - shows **trail conditions** (open / closed, from the RainoutLine board myvitals polls) on trailheads,
+    park headers and trail pages.
+
+  **Send to trailmap** in the myvitals app fills in the address and access key for you to confirm.
+  It syncs when the app opens (at most hourly) or on demand; nothing is written back to myvitals, and the
+  server address, access key and tracks stay on the phone (left out of Android backups).
 
 ## Data sources (all free, keyless)
 
@@ -26,6 +39,7 @@ Overpass API directly.
 | Trails + parks | **OpenStreetMap**: the trail pack (built from [Geofabrik](https://download.geofabrik.de/) extracts by `trailpack/build_pack.py`), else the [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API) (with mirror fallback) |
 | Elevation | **Open-Topo-Data** (`ned10m`), USGS EPQS spot-check |
 | Basemap | [OpenFreeMap](https://openfreemap.org) vector styles: `liberty` (light) / `dark` (dark mode) |
+| Your rides + trail conditions (optional) | your own [myvitals](https://github.com/Pr0zak/myvitals) server |
 
 ## Build
 

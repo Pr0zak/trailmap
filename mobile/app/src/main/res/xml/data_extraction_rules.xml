@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12 and up: the myvitals directory (server address, access token, recorded GPS
+     tracks) is left out of both cloud backup and phone-to-phone transfer. Reconnecting on a
+     new phone takes the address and token again. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="myvitals/" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="myvitals/" />
+    </device-transfer>
+</data-extraction-rules>

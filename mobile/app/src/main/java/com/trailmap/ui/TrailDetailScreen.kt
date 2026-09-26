@@ -72,23 +72,36 @@ import kotlin.math.cos
 import kotlin.math.min
 import com.trailmap.data.ElevationProfile
 import com.trailmap.data.Trail
+import com.trailmap.data.TrailConditions
 import com.trailmap.data.TrailRoute
+import com.trailmap.data.TrailStatus
+import com.trailmap.data.TrailVisits
 import com.trailmap.data.UseType
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TrailDetailScreen(vm: TrailsViewModel, id: String, onBack: () -> Unit, onShowOnMap: () -> Unit = {}) {
+fun TrailDetailScreen(
+    vm: TrailsViewModel,
+    id: String,
+    onBack: () -> Unit,
+    onShowOnMap: () -> Unit = {},
+    onOpenRecorded: (String) -> Unit = {},
+) {
     val trail = vm.trailById(id)
     val ui by vm.state.collectAsStateWithLifecycle()
     val profiles by vm.profiles.collectAsStateWithLifecycle()
 
     LaunchedEffect(id) { vm.ensureProfile(id) }
+    // A trail opened from a recorded ride may not be in the loaded set, so ask directly.
+    val visits = ui.visits[id] ?: remember(id, ui.visitsVersion, ui.recorded) { vm.visitsFor(id) }
 
     TrailDetailContent(
         trail = trail,
         profile = profiles[id],
         ui = ui,
+        visits = visits,
+        onOpenRecorded = onOpenRecorded,
         onBack = onBack,
         onToggleSaved = vm::toggleSaved,
         onCreateRide = { name, t -> vm.createRide(name, seed = t) },
@@ -114,6 +127,8 @@ internal fun TrailDetailContent(
     onAddToRide: (String, Trail) -> Unit,
     onShowOnMap: (Trail) -> Unit = {},
     chartScrub: Float? = null,
+    visits: TrailVisits? = null,
+    onOpenRecorded: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     var showAddToRide by remember { mutableStateOf(false) }
@@ -217,7 +232,10 @@ internal fun TrailDetailContent(
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState()),
         ) {
-            RoutePreview(trail, marker = scrubPoint, onShowOnMap = { onShowOnMap(trail) })
+            RoutePreview(
+                trail, marker = scrubPoint, onShowOnMap = { onShowOnMap(trail) },
+                ridden = visits?.riddenPaths.orEmpty(),
+            )
 
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -232,17 +250,46 @@ internal fun TrailDetailContent(
                     )
                 }
 
+                // Open or closed, from the trail status board myvitals polls. Unpaved only.
+                val condition = remember(trail, ui.conditions) { TrailConditions.forTrail(trail, ui.conditions) }
+                if (condition != null) ConditionCard(condition)
+
                 // The numbers that decide a ride. Climb and descent are "—" until the
                 // profile arrives, rather than a spinner in the middle of the row.
                 val prof = profile?.takeIf { it.points.isNotEmpty() }
+                // Your own average for this kind of trail when myvitals has one; otherwise flat
+                // 10 mph by bike and 3 on foot.
+                val pace = ui.pace?.forTrail(trail)
                 Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
-                    Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-                        Stat("%.1f mi".format(trail.lengthMiles), "Length")
-                        Stat(prof?.let { "+${it.ascentFeet.roundToInt()} ft" } ?: "—", "Climb")
-                        Stat(prof?.let { "−${it.descentFeet.roundToInt()} ft" } ?: "—", "Descent")
-                        Stat(estimate(trail), if (UseType.BIKE in trail.uses) "By bike" else "Walking")
+                    Column(Modifier.fillMaxWidth().padding(vertical = 14.dp)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                            Stat("%.1f mi".format(trail.lengthMiles), "Length")
+                            Stat(prof?.let { "+${it.ascentFeet.roundToInt()} ft" } ?: "—", "Climb")
+                            Stat(prof?.let { "−${it.descentFeet.roundToInt()} ft" } ?: "—", "Descent")
+                            Stat(
+                                estimate(trail, pace?.mph),
+                                when {
+                                    pace != null -> "Your pace"
+                                    UseType.BIKE in trail.uses -> "By bike"
+                                    else -> "Walking"
+                                },
+                            )
+                        }
+                        if (pace != null) {
+                            Text(
+                                "At your %.1f mph %s average · %d %s".format(
+                                    pace.mph, pace.noun, pace.count,
+                                    if (pace.kind.onFoot) (if (pace.count == 1) "walk" else "walks") else (if (pace.count == 1) "ride" else "rides"),
+                                ),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp),
+                            )
+                        }
                     }
                 }
+
+                if (ui.recorded.isNotEmpty()) YourRidesHere(trail, visits, ui, onOpenRecorded)
 
                 if (trail.surfaceMix.size > 1) {
                     Column {
@@ -293,12 +340,122 @@ private const val SYNC_ORDER_MAX_PATHS = 200
 /** Zoom used when "View on map" centres a single trail. */
 private const val TRAIL_FOCUS_ZOOM = 14.0
 
-/** Rough time at 10 mph by bike, 3 mph on foot. */
-private fun estimate(trail: Trail): String {
-    val mph = if (UseType.BIKE in trail.uses) 10.0 else 3.0
-    val minutes = (trail.lengthMiles / mph * 60).roundToInt().coerceAtLeast(1)
+/** Time at [mph] — your own pace when there is one — else 10 mph by bike, 3 mph on foot. */
+private fun estimate(trail: Trail, mph: Double? = null): String {
+    val speed = mph ?: if (UseType.BIKE in trail.uses) 10.0 else 3.0
+    val minutes = (trail.lengthMiles / speed * 60).roundToInt().coerceAtLeast(1)
     return if (minutes < 90) "~$minutes min" else "~%.1f h".format(minutes / 60.0)
 }
+
+/** The trail's open/closed state, with the board's message and how fresh it is. */
+@Composable
+private fun ConditionCard(status: TrailStatus) {
+    val context = LocalContext.current
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        // Only an http(s) page opens: the address comes from the server.
+        onClick = {
+            status.link?.let { url ->
+                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+            }
+        },
+        enabled = status.link != null,
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ConditionChip(status)
+                Spacer(Modifier.width(8.dp))
+                Text(status.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            status.comment?.let {
+                Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 6.dp))
+            }
+            Text(
+                listOfNotNull(
+                    status.updatedAt?.let { "Posted ${ago(it)}" },
+                    status.checkedAt?.let { "checked ${ago(it)}" },
+                    "RainoutLine".takeIf { status.link != null },
+                ).joinToString(" · "),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+    }
+}
+
+/**
+ * What your recorded rides say about this trail: how much of it you've covered, how often
+ * and when, and the rides themselves. "Not yet" is said plainly — that's the useful answer
+ * when picking somewhere new.
+ */
+@Composable
+private fun YourRidesHere(trail: Trail, visits: TrailVisits?, ui: TrailsUiState, onOpenRecorded: (String) -> Unit) {
+    val dark = darkTheme()
+    Column {
+        SectionTitle("Your rides here")
+        when {
+            visits == null -> Text(
+                if (UseType.BIKE in trail.uses) "You haven't ridden this one yet." else "You haven't been on this one yet.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            else -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (visits.ridden) {
+                    Text(
+                        "Ridden %.1f of %.1f mi (%d%%)".format(
+                            visits.riddenMeters / METERS_PER_MILE, visits.totalMeters / METERS_PER_MILE, (visits.riddenFraction * 100).roundToInt(),
+                        ),
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    CoverageBar(visits.riddenFraction, dark)
+                    val first = visits.rides.mapNotNull { ui.recordedById[it]?.start }.minOrNull()
+                    Text(
+                        listOfNotNull(
+                            if (visits.rides.size == 1) "1 ride" else "${visits.rides.size} rides",
+                            first?.takeIf { visits.rides.size > 1 }?.let { "first ${shortDate(it)}" },
+                            visits.lastRidden?.let { "last ${shortDate(it)}" },
+                        ).joinToString(" · "),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (visits.riddenFraction < 0.9) {
+                        Text(
+                            "The blue edge on the map marks what you've ridden.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                if (visits.onFoot.isNotEmpty()) {
+                    Text(
+                        "On foot ${visits.onFoot.size}×" + (visits.lastOnFoot?.let { " · last ${shortDate(it)}" } ?: "") +
+                            " · %d%% of it".format((visits.onFootFraction * 100).roundToInt()),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                var showAll by remember(trail.id) { mutableStateOf(false) }
+                val all = (visits.rides + visits.onFoot).mapNotNull { ui.recordedById[it] }.sortedByDescending { it.start }
+                (if (showAll) all else all.take(RECENT_VISITS)).forEach { rec ->
+                    RecordedRow(rec, onClick = { onOpenRecorded(rec.id) })
+                }
+                if (all.size > RECENT_VISITS) {
+                    TextButton(onClick = { showAll = !showAll }) {
+                        Text(if (showAll) "Show fewer" else "Show all ${all.size}")
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** How many of your visits the detail screen lists before "Show all". */
+private const val RECENT_VISITS = 5
+
+private const val METERS_PER_MILE = 1609.344
 
 @Composable
 private fun Stat(value: String, label: String) = Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -320,7 +477,8 @@ private fun SectionTitle(text: String) = Text(
  * chart's scrub position) is drawn as a larger dot in the theme's primary color.
  */
 @Composable
-private fun RoutePreview(trail: Trail, marker: GeoPoint?, onShowOnMap: () -> Unit) {
+private fun RoutePreview(trail: Trail, marker: GeoPoint?, onShowOnMap: () -> Unit, ridden: List<List<GeoPoint>> = emptyList()) {
+    val glow = youColor(darkTheme()).copy(alpha = 0.5f)
     val bg = MaterialTheme.colorScheme.surfaceContainerHigh
     val grid = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
     val lineColor = trail.surface.color
@@ -358,6 +516,14 @@ private fun RoutePreview(trail: Trail, marker: GeoPoint?, onShowOnMap: () -> Uni
             for (i in 0..3) {
                 val gy = size.height * i / 3f
                 drawLine(grid, Offset(-20f, gy), Offset(size.width + 20f, gy), 1f)
+            }
+            // What you've ridden glows under the line, as on the map.
+            ridden.filter { it.size >= 2 }.forEach { path ->
+                val line = Path().apply {
+                    moveTo(pt(path[0]).x, pt(path[0]).y)
+                    path.drop(1).forEach { lineTo(pt(it).x, pt(it).y) }
+                }
+                drawPath(line, glow, style = Stroke(22f, cap = StrokeCap.Round, join = StrokeJoin.Round))
             }
             trail.paths.filter { it.size >= 2 }.forEach { path ->
                 val line = Path().apply {

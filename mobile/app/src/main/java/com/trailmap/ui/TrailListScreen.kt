@@ -29,6 +29,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
@@ -64,7 +66,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.trailmap.data.MtbDifficulty
 import com.trailmap.data.SurfaceType
 import com.trailmap.data.Trail
+import com.trailmap.data.TrailConditions
+import com.trailmap.data.TrailStatus
 import com.trailmap.data.TrailSystem
+import com.trailmap.data.TrailVisits
 import com.trailmap.data.UseType
 import kotlin.math.roundToInt
 
@@ -116,7 +121,12 @@ internal fun TrailListContent(
                                 ui.loading -> "Loading…"
                                 ui.mode == MapMode.MTB ->
                                     "${ui.systems.size} systems · within ${ui.radiusMiles.roundToInt()} mi"
-                                else -> "${trails.size} within ${ui.radiusMiles.roundToInt()} mi · nearest first"
+                                else -> "${trails.size} within ${ui.radiusMiles.roundToInt()} mi · " + when (ui.sort) {
+                                    TrailSort.DISTANCE -> "nearest first"
+                                    TrailSort.LENGTH -> "longest first"
+                                    TrailSort.NAME -> "A to Z"
+                                    TrailSort.LAST_RIDDEN -> "last ridden first"
+                                }
                             },
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -152,7 +162,22 @@ internal fun TrailListContent(
                     .padding(horizontal = 12.dp, vertical = 6.dp),
             )
 
-            SortChip(ui.sort, onSetSort, Modifier.padding(horizontal = 12.dp))
+            // A new order starts from its top. Keyed rows otherwise keep the old first row in
+            // place, so the trails that just moved above it sit out of sight.
+            // Only on a change: coming back to the tab restores where the list was.
+            val listState = rememberLazyListState()
+            var sortShown by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(ui.sort) }
+            LaunchedEffect(ui.sort) {
+                if (ui.sort != sortShown) {
+                    sortShown = ui.sort
+                    listState.scrollToItem(0)
+                }
+            }
+            SortChip(
+                ui.sort, onSetSort, Modifier.padding(horizontal = 12.dp),
+                // "Last ridden" only means something once there are rides to go by.
+                options = TrailSort.entries.filter { it != TrailSort.LAST_RIDDEN || ui.recorded.isNotEmpty() },
+            )
 
             when {
                 ui.loading && trails.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
@@ -167,10 +192,15 @@ internal fun TrailListContent(
                     },
                     onWiden = { filters.setRadiusMiles(it) },
                 )
-                ui.mode == MapMode.MTB -> LazyColumn {
+                ui.mode == MapMode.MTB -> LazyColumn(state = listState) {
                     ui.systems.forEach { system ->
                         item(key = "hdr_${system.id}") {
-                            SystemHeader(system) { onOpenSystem(system) }
+                            val condition = remember(system, ui.conditions) { TrailConditions.forSystem(system, ui.conditions) }
+                            SystemHeader(
+                                system,
+                                ridden = if (ui.recorded.isEmpty()) null else system.trails.count { ui.visits[it.id]?.ridden == true },
+                                condition = condition,
+                            ) { onOpenSystem(system) }
                         }
                         items(system.trails, key = { it.id }) { trail ->
                             TrailRow(
@@ -178,17 +208,19 @@ internal fun TrailListContent(
                                 isSaved = ui.isSaved(trail.id),
                                 onToggleSave = { onToggleSaved(trail.id) },
                                 onClick = { onOpenTrail(trail.id) },
+                                visits = ui.visits[trail.id],
                             )
                         }
                     }
                 }
-                else -> LazyColumn {
+                else -> LazyColumn(state = listState) {
                     items(trails, key = { it.id }) { trail ->
                         TrailRow(
                             trail = trail,
                             isSaved = ui.isSaved(trail.id),
                             onToggleSave = { onToggleSaved(trail.id) },
                             onClick = { onOpenTrail(trail.id) },
+                            visits = ui.visits[trail.id],
                         )
                     }
                 }
@@ -197,9 +229,14 @@ internal fun TrailListContent(
     }
 }
 
-/** "Sort: Distance ▾" with a menu of the three orders. */
+/** "Sort: Distance ▾" with a menu of the orders. */
 @Composable
-private fun SortChip(sort: TrailSort, onSetSort: (TrailSort) -> Unit, modifier: Modifier = Modifier) {
+private fun SortChip(
+    sort: TrailSort,
+    onSetSort: (TrailSort) -> Unit,
+    modifier: Modifier = Modifier,
+    options: List<TrailSort> = TrailSort.entries,
+) {
     Box(modifier) {
         var open by remember { mutableStateOf(false) }
         AssistChip(
@@ -208,7 +245,7 @@ private fun SortChip(sort: TrailSort, onSetSort: (TrailSort) -> Unit, modifier: 
             trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null, Modifier.size(18.dp)) },
         )
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            TrailSort.entries.forEach { option ->
+            options.forEach { option ->
                 DropdownMenuItem(
                     text = { Text(option.label) },
                     leadingIcon = { RadioButton(selected = option == sort, onClick = null) },
@@ -281,9 +318,13 @@ private fun EmptyTrails(ui: TrailsUiState, onClearFilters: () -> Unit, onWiden: 
     }
 }
 
-/** Header for a clustered trail system in MTB mode: a tinted band, with Map to recenter there. */
+/**
+ * Header for a clustered trail system in MTB mode: a tinted band, with Map to recenter there.
+ * [ridden] (with myvitals connected) counts the members you've ridden; [condition] is the
+ * system's open/closed state from the trail status board.
+ */
 @Composable
-internal fun SystemHeader(system: TrailSystem, onClick: () -> Unit) {
+internal fun SystemHeader(system: TrailSystem, ridden: Int? = null, condition: TrailStatus? = null, onClick: () -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
         Row(
             Modifier.padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
@@ -294,10 +335,12 @@ internal fun SystemHeader(system: TrailSystem, onClick: () -> Unit) {
             Column(Modifier.weight(1f)) {
                 Text(system.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Text(
-                    "${system.trails.size} ${if (system.trails.size == 1) "trail" else "trails"} · %.1f mi".format(system.totalMiles),
+                    "${system.trails.size} ${if (system.trails.size == 1) "trail" else "trails"} · %.1f mi".format(system.totalMiles) +
+                        (if (ridden != null) " · $ridden ridden" else ""),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (condition != null) ConditionLine(condition, Modifier.padding(top = 4.dp))
             }
             ScaleRangeChip(system.scaleMin, system.scaleMax)
             TextButton(onClick = onClick) { Text("Map") }
@@ -336,6 +379,7 @@ internal fun TrailRow(
     isSaved: Boolean,
     onToggleSave: () -> Unit,
     onClick: () -> Unit,
+    visits: TrailVisits? = null,
 ) {
     Column(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Row(
@@ -366,6 +410,7 @@ internal fun TrailRow(
                     Spacer(Modifier.height(4.dp))
                     MtbBadge(trail.mtbScale)
                 }
+                VisitLine(visits, Modifier.padding(top = 3.dp))
             }
             IconButton(onClick = onToggleSave) {
                 Icon(
