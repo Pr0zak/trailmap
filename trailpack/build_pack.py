@@ -1,31 +1,39 @@
 #!/usr/bin/env python3
 """
-Build trailmap's regional trail pack from Geofabrik OSM extracts.
+Build trailmap's trail packs from Geofabrik OSM extracts — one pack per US state.
 
 The app used to ask a public Overpass server for trails on every pan, and those servers are
-routinely slow (10-45 s) or refusing work outright (HTTP 504). The pack moves that work here:
-this script runs weekly in GitHub Actions, and the phone downloads the result once and answers
-every load inside the region from disk, in milliseconds.
+routinely slow (10-45 s) or refusing work outright (HTTP 504). The packs move that work here:
+GitHub Actions builds one per state every week, and the phone downloads the states the user
+picks and answers every load inside them from disk, in milliseconds.
 
-The pack is a zip of 0.25-degree tiles. Each entry holds exactly what the app's Overpass query
-for that kind would have returned for the tile, in Overpass's own `out geom` JSON, so the app
-parses it with the code it already has:
+A pack is a zip of 0.25-degree tiles. Each entry holds exactly what the app's Overpass query for
+that kind would have returned for the tile, in Overpass's own `out geom` JSON, so the app parses
+it with the code it already has:
 
-    meta.json              schema, tile size, build time, OSM data timestamp, covered tiles
+    meta.json              schema, tile size, build time, OSM data timestamp, covered tiles,
+                           and the state's outline (to work out coverage across several states)
     all/<x>_<y>.json       ALL mode: named paths/cycleways/tracks/bridleways + non-sidewalk footways
     mtb/<x>_<y>.json       MTB mode: named mtb:scale ways, designated dirt bike paths, route=mtb
     parks/<x>_<y>.json     named parks/reserves/protected areas, for naming MTB trail systems
 
 x = floor(lon / 0.25), y = floor(lat / 0.25). An element is written to every tile any of its
-vertices falls in, so the app de-duplicates by (type, id) when it reads several tiles.
+vertices falls in, so the app de-duplicates by (type, id) when it reads several tiles — and
+across states, since Geofabrik's extracts overlap at the borders.
 
 The filters below must stay in step with buildQuery / buildMtbQuery / buildParkQuery in
 mobile/app/src/main/java/com/trailmap/data/OverpassClient.kt. Bump PACK_SCHEMA (here and in the
 app's TrailPack.SCHEMA) whenever the layout or the filters change.
 
+Which states are built is trailpack/states.txt: one Geofabrik slug per line, `#` comments a state
+out. A state taken out of that list is dropped from the index and its pack deleted on the next
+publish, so the app stops offering it.
+
 Usage:
-    pip install osmium shapely
-    python build_pack.py --regions kansas missouri --out trailpack.zip [--workdir DIR]
+    pip install osmium shapely          # + apt install osmium-tool for a faster pre-filter
+    python build_pack.py build --regions kansas --out trailpack-kansas.zip --index-entry kansas.json
+    python build_pack.py states [--only "kansas missouri"]     # JSON list, for the CI matrix
+    python build_pack.py index --entries DIR [--old OLD.json] --out trailpack-index.json
 """
 from __future__ import annotations
 
@@ -35,6 +43,8 @@ import json
 import math
 import os
 import re
+import shutil
+import subprocess
 import sys
 import urllib.request
 import zipfile
@@ -48,6 +58,23 @@ from shapely.prepared import prep
 PACK_SCHEMA = 1
 TILE_DEG = 0.25
 GEOFABRIK = "https://download.geofabrik.de/north-america/us"
+HERE = os.path.dirname(os.path.abspath(__file__))
+STATES_FILE = os.path.join(HERE, "states.txt")
+
+# Display names where title-casing the slug gets it wrong.
+NAMES = {
+    "district-of-columbia": "District of Columbia",
+    "us-virgin-islands": "U.S. Virgin Islands",
+}
+
+
+def state_name(slug: str) -> str:
+    return NAMES.get(slug) or " ".join(w.capitalize() for w in slug.split("-"))
+
+
+def read_states(path: str = STATES_FILE) -> list[str]:
+    with open(path) as f:
+        return [l.split("#", 1)[0].strip() for l in f if l.split("#", 1)[0].strip()]
 
 # --- Filters, mirroring the app's Overpass queries --------------------------------------------
 
@@ -226,7 +253,42 @@ def osm_timestamp(pbf: str) -> str | None:
 
 # --- Build -----------------------------------------------------------------------------------
 
-def build(regions: list[str], workdir: str, out: str):
+def prefilter(pbf: str) -> str:
+    """
+    Cut the extract down to the objects the passes below can use, with osmium-tool when it is
+    installed (CI). pyosmium alone works too; it just walks every way of a big state in Python.
+    Referenced nodes and relation members are kept, so no geometry is lost.
+    """
+    if not shutil.which("osmium"):
+        return pbf
+    out = pbf.replace(".osm.pbf", ".trails.osm.pbf")
+    subprocess.run(
+        [
+            "osmium", "tags-filter", "--overwrite", "-o", out, pbf,
+            "w/highway=path,cycleway,track,bridleway,footway", "w/mtb:scale", "r/route=mtb",
+            "wr/leisure=park,nature_reserve,recreation_ground", "wr/boundary=protected_area,national_park",
+        ],
+        check=True,
+    )
+    return out
+
+
+def outline(shape, pad_deg: float, tol_deg: float):
+    """
+    The region's outline as rings of [lon, lat], one per polygon exterior.
+
+    Padded before simplifying so the result still contains the whole region: the app decides
+    from these whether its installed states together cover a tile, and Geofabrik's outlines of
+    neighbouring states overlap by only ~100 m (Kansas and Missouri at 39.1 N), so simplifying
+    alone would open slivers along the border that belong to neither.
+    """
+    g = shape.buffer(pad_deg) if pad_deg else shape
+    g = g.simplify(tol_deg, preserve_topology=True)
+    polys = list(g.geoms) if hasattr(g, "geoms") else [g]
+    return [[[round(x, 4), round(y, 4)] for x, y in p.exterior.coords] for p in polys]
+
+
+def build(regions: list[str], workdir: str, out: str, index_entry: str | None = None):
     os.makedirs(workdir, exist_ok=True)
     tiles: dict[str, dict[tuple[int, int], dict[tuple[str, int], dict]]] = {
         "all": defaultdict(dict), "mtb": defaultdict(dict), "parks": defaultdict(dict),
@@ -245,11 +307,12 @@ def build(regions: list[str], workdir: str, out: str):
         download(f"{GEOFABRIK}/{region}.poly", poly)
         shapes.append(read_poly(poly))
         stamps.append(osm_timestamp(pbf))
+        src = prefilter(pbf)
 
         rels = RelationPass()
-        rels.apply_file(pbf)
+        rels.apply_file(src)
         ways = WayPass(rels.needed)
-        ways.apply_file(pbf, locations=True, idx="flex_mem")
+        ways.apply_file(src, locations=True, idx="flex_mem")
         print(
             f"{region}: {len(ways.all)} all-ways, {len(ways.mtb)} mtb-ways, {len(rels.mtb)} mtb-rels, "
             f"{len(ways.parks)} park-ways, {len(rels.parks)} park-rels",
@@ -296,8 +359,9 @@ def build(regions: list[str], workdir: str, out: str):
     # A tile is "covered" when the regions contain it outright, so every trail near it is in the
     # pack. Tiles straddling a region's edge still get whatever data fell in them, but the app
     # asks Overpass for a circle centred there rather than showing half the trails.
-    region = prep(unary_union(shapes))
-    lo_x, lo_y, hi_x, hi_y = unary_union(shapes).bounds
+    union = unary_union(shapes)
+    region = prep(union)
+    lo_x, lo_y, hi_x, hi_y = union.bounds
     covered = []
     for x in range(math.floor(lo_x / TILE_DEG), math.floor(hi_x / TILE_DEG) + 1):
         for y in range(math.floor(lo_y / TILE_DEG), math.floor(hi_y / TILE_DEG) + 1):
@@ -312,6 +376,8 @@ def build(regions: list[str], workdir: str, out: str):
         "built": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "osmTimestamp": stamp,
         "covered": sorted(covered),
+        # ~500 m of padding, ~200 m of simplification: see outline().
+        "outline": outline(union, 0.005, 0.002),
     }
     tmp = out + ".part"
     raw_total = 0
@@ -329,16 +395,84 @@ def build(regions: list[str], workdir: str, out: str):
         f"tiles {sizes}, {len(covered)} covered, OSM data as of {stamp}",
         flush=True,
     )
+    if index_entry:
+        entry = {
+            "slug": "+".join(regions),
+            "name": " & ".join(state_name(r) for r in regions),
+            "asset": os.path.basename(out),
+            "bytes": os.path.getsize(out),
+            "built": meta["built"],
+            "osmTimestamp": stamp,
+            "bbox": [round(v, 4) for v in union.bounds],
+            # Coarse (~1 km): only answers "which state is the map looking at?".
+            "outline": outline(union, 0, 0.01),
+        }
+        with open(index_entry, "w") as f:
+            json.dump(entry, f, separators=(",", ":"))
+
+
+def merge_index(entries_dir: str, old: str | None, out: str) -> list[str]:
+    """
+    Write the index the app lists states from: this run's entries over the previous index,
+    limited to states.txt. A state whose build failed this week keeps last week's entry (its
+    pack is still published); a state taken out of states.txt is dropped. Returns the dropped
+    slugs, so the workflow can delete their packs.
+    """
+    states = read_states()
+    by_slug = {}
+    if old and os.path.exists(old):
+        with open(old) as f:
+            for e in json.load(f).get("states", []):
+                by_slug[e["slug"]] = e
+    if os.path.isdir(entries_dir):
+        for name in sorted(os.listdir(entries_dir)):
+            if name.endswith(".json"):
+                with open(os.path.join(entries_dir, name)) as f:
+                    e = json.load(f)
+                by_slug[e["slug"]] = e
+    dropped = sorted(s for s in by_slug if s not in states)
+    index = {
+        "schema": PACK_SCHEMA,
+        "generated": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "states": [by_slug[s] for s in states if s in by_slug],
+    }
+    with open(out, "w") as f:
+        json.dump(index, f, separators=(",", ":"))
+    print(f"index: {len(index['states'])} states, dropped {dropped or 'none'}", file=sys.stderr)
+    return dropped
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--regions", nargs="+", default=["kansas", "missouri"],
-                    help="Geofabrik US state slugs (north-america/us/<slug>)")
-    ap.add_argument("--out", default="trailpack.zip")
-    ap.add_argument("--workdir", default="work", help="where extracts are downloaded and cached")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    b = sub.add_parser("build", help="build one pack")
+    b.add_argument("--regions", nargs="+", required=True, help="Geofabrik US slugs (north-america/us/<slug>)")
+    b.add_argument("--out", required=True)
+    b.add_argument("--workdir", default="work", help="where extracts are downloaded and cached")
+    b.add_argument("--index-entry", help="also write this pack's entry for the state index")
+
+    st = sub.add_parser("states", help="print the states to build, as JSON")
+    st.add_argument("--only", default="", help="space/comma-separated subset (must be in states.txt)")
+
+    ix = sub.add_parser("index", help="merge per-state entries into trailpack-index.json")
+    ix.add_argument("--entries", required=True)
+    ix.add_argument("--old")
+    ix.add_argument("--out", required=True)
+
     a = ap.parse_args()
-    build(a.regions, a.workdir, a.out)
+    if a.cmd == "build":
+        build(a.regions, a.workdir, a.out, a.index_entry)
+    elif a.cmd == "states":
+        states = read_states()
+        only = [x for x in re.split(r"[\s,]+", a.only) if x]
+        unknown = [x for x in only if x not in states]
+        if unknown:
+            sys.exit(f"not in states.txt: {unknown}")
+        print(json.dumps(only or states))
+    else:
+        for slug in merge_index(a.entries, a.old, a.out):
+            print(slug)
 
 
 if __name__ == "__main__":

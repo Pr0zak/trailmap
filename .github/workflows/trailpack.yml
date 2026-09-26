@@ -1,13 +1,19 @@
 name: trailpack
 
-# Rebuilds the regional trail pack from Geofabrik's OpenStreetMap extracts and publishes it as
-# the `trailpack.zip` asset of the `trailpack` release, which the app downloads (see
-# TrailPackWorker). The release is a prerelease so the app updater, which reads
-# /releases/latest, never treats it as an app version.
+# Builds one trail pack per state listed in trailpack/states.txt from Geofabrik's OpenStreetMap
+# extracts, and publishes them with trailpack-index.json (which the app lists states from) on the
+# `trailpack` release. The app downloads the states the user picks (TrailPackWorker). The release
+# is a prerelease so the in-app updater, which reads /releases/latest, never treats it as an app
+# version. Taking a state out of states.txt drops it from the index and deletes its pack.
 on:
   schedule:
     - cron: '23 9 * * 1'   # Mondays; Geofabrik publishes the US extracts daily
   workflow_dispatch:
+    inputs:
+      states:
+        description: 'Rebuild only these states (space-separated slugs). Empty = every state in states.txt.'
+        required: false
+        default: ''
   push:
     branches: [main]
     paths: ['trailpack/**', '.github/workflows/trailpack.yml']
@@ -20,8 +26,37 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  plan:
     runs-on: ubuntu-latest
+    outputs:
+      states: ${{ steps.states.outputs.states }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: states
+        env:
+          ONLY: ${{ github.event.inputs.states }}
+        run: echo "states=$(python3 trailpack/build_pack.py states --only "$ONLY")" >> "$GITHUB_OUTPUT"
+
+      - name: Make sure the release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view trailpack >/dev/null 2>&1; then
+            gh release create trailpack --prerelease --latest=false \
+              --title "Trail data packs" \
+              --notes "Trail data for each US state, pre-extracted from OpenStreetMap so the app doesn't have to query a public Overpass server on every pan. Rebuilt weekly by .github/workflows/trailpack.yml. Map data © OpenStreetMap contributors, available under the Open Database License (ODbL): https://www.openstreetmap.org/copyright"
+          fi
+
+  build:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        state: ${{ fromJSON(needs.plan.outputs.states) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -29,19 +64,51 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install osmium + shapely
-        run: pip install osmium shapely
+      - name: Install osmium-tool, pyosmium, shapely
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends osmium-tool
+          pip install osmium shapely
 
-      - name: Build pack
-        run: python trailpack/build_pack.py --regions kansas missouri --workdir work --out trailpack.zip
+      - name: Build ${{ matrix.state }}
+        run: >
+          python trailpack/build_pack.py build --regions ${{ matrix.state }} --workdir work
+          --out trailpack-${{ matrix.state }}.zip --index-entry entry-${{ matrix.state }}.json
 
-      - name: Publish
+      - name: Publish ${{ matrix.state }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload trailpack trailpack-${{ matrix.state }}.zip --clobber
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: entry-${{ matrix.state }}
+          path: entry-${{ matrix.state }}.json
+          retention-days: 3
+
+  index:
+    needs: [plan, build]
+    # Publish whatever built. A state that failed keeps last week's index entry and pack.
+    if: ${{ always() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        continue-on-error: true   # every build failed: still apply removals below
+        with:
+          pattern: entry-*
+          path: entries
+          merge-multiple: true
+
+      - name: Publish the index; delete packs of states taken out of states.txt
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ! gh release view trailpack >/dev/null 2>&1; then
-            gh release create trailpack --prerelease --latest=false \
-              --title "Trail data pack" \
-              --notes "Every Kansas and Missouri trail the app shows, pre-extracted from OpenStreetMap so the app doesn't have to query a public Overpass server on every pan. Rebuilt weekly by .github/workflows/trailpack.yml. Map data © OpenStreetMap contributors, available under the Open Database License (ODbL): https://www.openstreetmap.org/copyright"
-          fi
-          gh release upload trailpack trailpack.zip --clobber
+          gh release download trailpack -p trailpack-index.json -O old-index.json 2>/dev/null || true
+          dropped=$(python3 trailpack/build_pack.py index --entries entries --old old-index.json --out trailpack-index.json)
+          gh release upload trailpack trailpack-index.json --clobber
+          for slug in $dropped; do
+            echo "removing $slug from the release"
+            gh release delete-asset trailpack "trailpack-$slug.zip" --yes || true
+          done
