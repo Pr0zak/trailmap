@@ -342,7 +342,8 @@ internal fun TrailRow(
             Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.width(4.dp).height(44.dp).clip(RoundedCornerShape(50)).background(trail.surface.color))
+            // Purple for a horse trail, as on the map; otherwise its surface colour.
+            Box(Modifier.width(4.dp).height(44.dp).clip(RoundedCornerShape(50)).background(if (trail.horseTrail) HorseTrailColor else trail.surface.color))
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(

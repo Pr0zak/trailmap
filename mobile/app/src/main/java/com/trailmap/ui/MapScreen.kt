@@ -160,7 +160,7 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
     LaunchedEffect(ui.filterKey, styleRef.value) {
         val style = styleRef.value ?: return@LaunchedEffect
         val t0 = android.os.SystemClock.elapsedRealtime()
-        // Horse sections get their own color in ALL mode only; MTB colors mean difficulty.
+        // Horse trails get their own color in ALL mode only; MTB colors mean difficulty.
         val fc = withContext(Dispatchers.Default) { trailsFc(ui.filtered, horse = ui.mode == MapMode.ALL) }
         if (styleRef.value !== style) return@LaunchedEffect // theme flipped mid-build
         style.getSourceAs<GeoJsonSource>(SRC_TRAILS)?.setGeoJson(fc)
@@ -568,7 +568,7 @@ private fun MapLegend(mode: MapMode, dark: Boolean, modifier: Modifier = Modifie
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                (SURFACE_LINE_COLORS + ("Horse" to HORSE_LINE_COLOR)).forEach { (label, colors) ->
+                (SURFACE_LINE_COLORS + ("Horse trail" to HORSE_LINE_COLOR)).forEach { (label, colors) ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Swatch(Color((if (dark) colors.second else colors.first).toInt()), 14)
                         Spacer(Modifier.size(4.dp))
@@ -604,8 +604,8 @@ private val SURFACE_LINE_COLORS = listOf(
 )
 
 /**
- * Sections open to horses, in ALL mode, as (light, dark): purple, which no surface, basemap
- * road, park or water uses on either map.
+ * Horse trails ([Trail.horseTrailPaths]) in ALL mode, as (light, dark): purple, which no
+ * surface, basemap road, park or water uses on either map.
  */
 private val HORSE_LINE_COLOR = 0xFF7B1FA2 to 0xFFCE93D8
 
@@ -744,7 +744,7 @@ internal fun trailColorExpr(dark: Boolean): Expression {
 }
 
 /**
- * Data-driven line color for unrated lines: purple where the section is open to horses (the
+ * Data-driven line color for unrated lines: purple where the piece is a horse trail (the
  * "horse" prop, set in ALL mode only), otherwise by "surface", brightened on the dark basemap.
  */
 private fun surfaceColorExpr(dark: Boolean): Expression = Expression.switchCase(
@@ -796,7 +796,7 @@ private fun trailsFc(trails: List<Trail>, horse: Boolean = false): String {
             appendJsonString(sb, trail.id)
             sb.append(",\"surface\":\"").append(trail.surface.name)
             sb.append("\",\"mtb\":\"").append(mtb)
-            sb.append("\",\"horse\":").append(horse && trail.horsePaths.getOrElse(index) { false })
+            sb.append("\",\"horse\":").append(horse && trail.horseTrailPaths.getOrElse(index) { false })
             sb.append("},\"geometry\":{\"type\":\"LineString\",\"coordinates\":[")
             for (i in path.indices) {
                 if (i > 0) sb.append(',')

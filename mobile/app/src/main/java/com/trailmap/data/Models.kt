@@ -70,6 +70,9 @@ enum class SurfaceType(val label: String, val color: Color) {
     }
 }
 
+/** Show, hide, or show only horse trails ([Trail.horseTrail]). */
+enum class HorseTrailFilter(val label: String) { SHOW("Show"), HIDE("Hide"), ONLY("Only") }
+
 /** Intended use, derived from OSM bicycle/foot designation + highway type. */
 enum class UseType(val label: String) { WALK("Walking"), BIKE("Biking"), HORSE("Horseback") }
 
@@ -110,12 +113,15 @@ data class Trail(
     val mtbScale: Int? = null,      // OSM mtb:scale (0..6) if this is an MTB-rated trail
     val parkName: String? = null,   // name of the OSM park/area containing the trail (MTB mode)
     /**
-     * Per entry of [paths]: that piece is open to horses. Kept per piece, not per trail, because
-     * long multi-use trails allow horses on only part of their length — the Katy Trail on 11% of
-     * its 240 miles, the Rock Island Trail on 46% — and colouring all of one as a horse trail
-     * would be wrong. Empty means none.
+     * Per entry of [paths]: that piece is a horse trail — a bridleway or a horse-designated path
+     * that bikes aren't allowed on (walkers may be). Not merely open to horses: most horse-legal
+     * miles are multi-use trails (the Flint Hills Trail, 96% of the Katy Trail's horse
+     * sections), which keep their surface colour. Per piece, because a named trail can mix
+     * both. Empty means none.
      */
-    val horsePaths: List<Boolean> = emptyList(),
+    val horseTrailPaths: List<Boolean> = emptyList(),
+    /** Mostly (by length) a horse trail — what the "Horse trails" filter and the list go by. */
+    val horseTrail: Boolean = false,
 ) {
     val lengthMiles: Double get() = lengthMeters / 1609.344
     val distanceMiles: Double get() = distanceMeters / 1609.344

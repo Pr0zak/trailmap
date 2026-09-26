@@ -59,7 +59,7 @@ object Samples {
             id = id, name = name, surface = surface, surfaceMix = mix, uses = uses,
             lengthMeters = Geo.lengthMeters(path),
             distanceMeters = dist, paths = listOf(path), center = path[path.size / 2],
-            mtbScale = mtb, parkName = park, horsePaths = listOf(horse),
+            mtbScale = mtb, parkName = park, horseTrailPaths = listOf(horse), horseTrail = horse,
         )
     }
 
@@ -131,7 +131,7 @@ object Samples {
 
 /**
  * Stand-in for the MapLibre view, which can't render off-device: a pale basemap with a few
- * grey roads and the sample trails drawn in their surface colors (horse sections in purple).
+ * grey roads and the sample trails drawn in their surface colors (horse trails in purple).
  */
 @Composable
 fun FauxMap(trails: List<Trail>, dark: Boolean = false, modifier: Modifier = Modifier.fillMaxSize()) {
@@ -169,7 +169,7 @@ fun FauxMap(trails: List<Trail>, dark: Boolean = false, modifier: Modifier = Mod
                 path.drop(1).forEach { lineTo(pt(it).x, pt(it).y) }
             }
             // As the real map in ALL mode: sections open to horses in purple.
-            val color = if (t.horsePaths.getOrElse(i) { false }) Color(if (dark) 0xFFCE93D8 else 0xFF7B1FA2) else surfaceLine(t.surface, dark)
+            val color = if (t.horseTrailPaths.getOrElse(i) { false }) Color(if (dark) 0xFFCE93D8 else 0xFF7B1FA2) else surfaceLine(t.surface, dark)
             drawPath(p, Color(0x55000000), style = Stroke(width = 12f, cap = StrokeCap.Round, join = StrokeJoin.Round))
             drawPath(p, color, style = Stroke(width = 7f, cap = StrokeCap.Round, join = StrokeJoin.Round))
         }

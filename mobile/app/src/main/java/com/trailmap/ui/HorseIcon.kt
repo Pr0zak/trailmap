@@ -6,6 +6,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.addPathNodes
 import androidx.compose.ui.unit.dp
 
+/** Horse trails in lists and badges; the light-map line colour (MapScreen's HORSE_LINE_COLOR). */
+val HorseTrailColor = Color(0xFF7B1FA2)
+
 /**
  * Horse head, for trails open to horses. Material's icon sets have no horse, so this is the
  * "horse-fill" glyph from Phosphor Icons (https://phosphoricons.com), MIT License,

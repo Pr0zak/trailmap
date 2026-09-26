@@ -8,6 +8,7 @@ import com.trailmap.data.ElevationClient
 import com.trailmap.data.ElevationProfile
 import com.trailmap.data.Geo
 import com.trailmap.data.GeoPoint
+import com.trailmap.data.HorseTrailFilter
 import com.trailmap.data.Locator
 import com.trailmap.data.OverpassClient
 import com.trailmap.data.Prefs
@@ -64,6 +65,8 @@ data class TrailsUiState(
     val selectedSurfaces: Set<SurfaceType> =
         setOf(SurfaceType.PAVED, SurfaceType.GRAVEL, SurfaceType.DIRT, SurfaceType.UNKNOWN),
     val selectedUses: Set<UseType> = UseType.entries.toSet(),
+    /** Show, hide, or show only horse trails. */
+    val horseTrails: HorseTrailFilter = HorseTrailFilter.SHOW,
     val minLengthMiles: Double = 0.0,
     val query: String = "",
     val savedIds: Set<String> = emptySet(),
@@ -127,6 +130,13 @@ data class TrailsUiState(
             .filter { it.name != "Unnamed path" }
             .filter { it.surface in selectedSurfaces }
             .filter { selectedUses.isEmpty() || it.uses.any { u -> u in selectedUses } }
+            .filter {
+                when (horseTrails) {
+                    HorseTrailFilter.SHOW -> true
+                    HorseTrailFilter.HIDE -> !it.horseTrail
+                    HorseTrailFilter.ONLY -> it.horseTrail
+                }
+            }
             .filter { it.lengthMiles >= minLengthMiles }
             .filter { query.isBlank() || it.name.contains(query.trim(), ignoreCase = true) }
             .filter { !showSavedOnly || it.id in savedIds }
@@ -176,6 +186,7 @@ data class TrailsUiState(
             selectedSurfaces.map { it.ordinal }.sorted().forEach { append(it) }
             append('|')
             selectedUses.map { it.ordinal }.sorted().forEach { append(it) }
+            append('|').append(horseTrails)
             append('|').append(minLengthMiles)
             append('|').append(query.trim().lowercase())
             append('|').append(showSavedOnly)
@@ -1043,6 +1054,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         it.copy(
             selectedSurfaces = defaults.selectedSurfaces,
             selectedUses = defaults.selectedUses,
+            horseTrails = defaults.horseTrails,
             minLengthMiles = defaults.minLengthMiles,
         )
     }
@@ -1058,6 +1070,8 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         val next = it.selectedSurfaces.toMutableSet().apply { if (!add(s)) remove(s) }
         it.copy(selectedSurfaces = next)
     }
+
+    fun setHorseTrails(f: HorseTrailFilter) = _state.update { it.copy(horseTrails = f) }
 
     fun toggleUse(u: UseType) = _state.update {
         val next = it.selectedUses.toMutableSet().apply { if (!add(u)) remove(u) }

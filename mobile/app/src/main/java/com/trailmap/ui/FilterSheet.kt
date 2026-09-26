@@ -54,6 +54,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.trailmap.data.SurfaceType
+import com.trailmap.data.HorseTrailFilter
 import com.trailmap.data.UseType
 import kotlin.math.roundToInt
 
@@ -61,6 +62,7 @@ import kotlin.math.roundToInt
 data class FilterActions(
     val toggleSurface: (SurfaceType) -> Unit = {},
     val toggleUse: (UseType) -> Unit = {},
+    val setHorseTrails: (HorseTrailFilter) -> Unit = {},
     val setMode: (MapMode) -> Unit = {},
     val setRadiusMiles: (Int) -> Unit = {},
     val setMinLength: (Double) -> Unit = {},
@@ -72,6 +74,7 @@ data class FilterActions(
         fun of(vm: TrailsViewModel) = FilterActions(
             toggleSurface = { vm.toggleSurface(it) },
             toggleUse = { vm.toggleUse(it) },
+            setHorseTrails = vm::setHorseTrails,
             setMode = vm::setMode,
             setRadiusMiles = vm::setRadiusMiles,
             setMinLength = { vm.setMinLength(it) },
@@ -97,6 +100,7 @@ internal fun activeFilterCount(ui: TrailsUiState): Int {
     var n = 0
     if (ui.selectedSurfaces != d.selectedSurfaces) n++
     if (ui.selectedUses != d.selectedUses) n++
+    if (ui.horseTrails != d.horseTrails) n++
     if (ui.minLengthMiles != d.minLengthMiles) n++
     if (!ui.autoLoadOnPan) n++
     return n
@@ -264,6 +268,19 @@ internal fun FilterSheetContent(ui: TrailsUiState, filters: FilterActions, onDon
                 label = { Text("Horse") },
                 leadingIcon = { Icon(HorseIcon, null, Modifier.size(FilterChipDefaults.IconSize)) },
             )
+        }
+
+        // Trails built for horses (purple on the map), as opposed to multi-use trails that
+        // horses may also use, which the Horse chip above covers.
+        SheetLabel("Horse trails")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            HorseTrailFilter.entries.forEach { f ->
+                FilterChip(
+                    selected = ui.horseTrails == f,
+                    onClick = { filters.setHorseTrails(f) },
+                    label = { Text(f.label) },
+                )
+            }
         }
 
         Spacer(Modifier.height(12.dp))

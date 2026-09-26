@@ -178,21 +178,31 @@ class TrailPackTest {
     }
 
     /**
-     * Horse access is kept per piece: a multi-use trail open to horses on part of its length
-     * (the Katy Trail: 11% of 240 miles) must only colour that part.
+     * Only horse trails are purple: a bridleway bikes aren't allowed on is one; a cycleway that
+     * merely allows horses (the Katy Trail's horse sections) is not. Kept per piece.
      */
-    @Test fun horseAccessIsPerPiece() = runBlocking {
+    @Test fun horseTrailsAreTheOnesBuiltForHorses() = runBlocking {
         val files = tmp.newFolder("files")
-        val horse = """{"type":"way","id":10,"tags":{"name":"Katy Trail","highway":"cycleway","horse":"yes"},""" +
-            """"geometry":[{"lat":38.70,"lon":-92.10},{"lat":38.71,"lon":-92.09}]}"""
-        val plain = """{"type":"way","id":11,"tags":{"name":"Katy Trail","highway":"cycleway"},""" +
-            """"geometry":[{"lat":38.71,"lon":-92.09},{"lat":38.72,"lon":-92.08}]}"""
-        pack(stateFile(files, "missouri"), listOf("missouri"), missouri, tiles = mapOf("all/-369_154.json" to listOf(horse, plain)))
+        fun w(id: Long, name: String, tags: String, lat: Double) =
+            """{"type":"way","id":$id,"tags":{"name":"$name",$tags},""" +
+                """"geometry":[{"lat":$lat,"lon":-92.10},{"lat":${lat + 0.01},"lon":-92.09}]}"""
+        val tiles = listOf(
+            w(10, "Katy Trail", """"highway":"cycleway","horse":"yes"""", 38.70),
+            w(11, "Katy Trail", """"highway":"cycleway"""", 38.71),
+            w(12, "Appaloosa Equestrian Trail", """"highway":"bridleway","horse":"designated","bicycle":"no","foot":"designated"""", 38.73),
+            w(13, "Flint Hills Trail", """"highway":"path","horse":"designated","bicycle":"designated"""", 38.75),
+        )
+        pack(stateFile(files, "missouri"), listOf("missouri"), missouri, tiles = mapOf("all/-369_154.json" to tiles))
         val client = OverpassClient(cacheDir = tmp.newFolder("cache"), endpoints = emptyList(), pack = TrailPacks(files))
-        val katy = client.fetchTrails(GeoPoint(38.71, -92.09), 16_000).trails.single()
-        assertEquals(2, katy.paths.size)
-        assertEquals(listOf(false, true), katy.horsePaths.sorted())
-        assertTrue(UseType.HORSE in katy.uses)
+        val byName = client.fetchTrails(GeoPoint(38.72, -92.09), 16_000).trails.associateBy { it.name }
+
+        val katy = byName.getValue("Katy Trail")
+        assertEquals(listOf(false, false), katy.horseTrailPaths)
+        assertFalse(katy.horseTrail)
+        assertTrue(UseType.HORSE in katy.uses) // still horse-legal, for the Horse use chip
+        assertTrue(byName.getValue("Appaloosa Equestrian Trail").horseTrail)
+        assertEquals(listOf(true), byName.getValue("Appaloosa Equestrian Trail").horseTrailPaths)
+        assertFalse("multi-use: bikes allowed", byName.getValue("Flint Hills Trail").horseTrail)
     }
 
     @Test fun wrongSchemaIsIgnored() {

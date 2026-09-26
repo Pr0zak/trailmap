@@ -225,7 +225,8 @@ internal fun TrailDetailContent(
                     MtbBadge(trail.mtbScale, Modifier.padding(start = 6.dp))
                     Spacer(Modifier.size(10.dp))
                     Text(
-                        "${usesLine(trail.uses)} · %.1f mi away".format(trail.distanceMiles),
+                        (if (trail.horseTrail) "Horse trail · " else "") +
+                            "${usesLine(trail.uses)} · %.1f mi away".format(trail.distanceMiles),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodyMedium,
                     )

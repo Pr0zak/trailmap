@@ -1038,6 +1038,7 @@ class OverpassClient(
         parks: List<Park> = emptyList(),
     ): Trail {
         val paths = members.map { it.points }
+        val horseTrailPieces = members.map { isHorseTrail(it.tags) }
         val allPoints = members.flatMap { it.points }
         val totalLength = members.sumOf { it.length }
 
@@ -1079,7 +1080,9 @@ class OverpassClient(
             center = mid,
             mtbScale = mtbScale,
             parkName = parkName,
-            horsePaths = members.map { UseType.HORSE in it.uses },
+            horseTrailPaths = horseTrailPieces,
+            horseTrail = members.withIndex().sumOf { (i, m) -> if (horseTrailPieces[i]) m.length else 0.0 } >= totalLength / 2 &&
+                horseTrailPieces.any { it },
         )
     }
 
@@ -1097,6 +1100,18 @@ class OverpassClient(
     private fun horseAllowed(tags: Map<String, String>): Boolean {
         val horse = tags["horse"]
         return horse in HORSE_ALLOWED || (tags["highway"] == "bridleway" && horse != "no")
+    }
+
+    /**
+     * A horse trail, as opposed to a trail horses may also use: a bridleway or a path with
+     * horse=designated, that bikes aren't allowed on. In Kansas and Missouri that is 131 named
+     * trails (Longview Lake Horse Trail, the Appaloosa Equestrian Trail); the other 213 with
+     * horse access are multi-use, like the Flint Hills Trail.
+     */
+    private fun isHorseTrail(tags: Map<String, String>): Boolean {
+        val horse = tags["horse"]
+        val forHorses = (tags["highway"] == "bridleway" && horse != "no") || horse == "designated"
+        return forHorses && tags["bicycle"] !in BICYCLE_ALLOWED
     }
 
     private fun segmentUses(tags: Map<String, String>): Set<UseType> {
