@@ -277,11 +277,13 @@ internal fun TrailDetailContent(
     }
 }
 
-private fun usesLine(uses: Set<UseType>): String = when {
-    UseType.WALK in uses && UseType.BIKE in uses -> "Walking & Biking"
-    UseType.WALK in uses -> "Walking"
-    UseType.BIKE in uses -> "Biking"
-    else -> "Trail"
+private fun usesLine(uses: Set<UseType>): String {
+    val names = UseType.entries.filter { it in uses }.map { it.label }
+    return when (names.size) {
+        0 -> "Trail"
+        1 -> names[0]
+        else -> names.dropLast(1).joinToString(", ") + " & " + names.last()
+    }
 }
 
 /** Trails with more ways than this are put in riding order off the main thread. */

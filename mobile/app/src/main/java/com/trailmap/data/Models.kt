@@ -71,7 +71,7 @@ enum class SurfaceType(val label: String, val color: Color) {
 }
 
 /** Intended use, derived from OSM bicycle/foot designation + highway type. */
-enum class UseType(val label: String) { WALK("Walking"), BIKE("Biking") }
+enum class UseType(val label: String) { WALK("Walking"), BIKE("Biking"), HORSE("Horseback") }
 
 /** OSM mtb:scale (0..6) mapped to IMBA-ish difficulty labels + colors for MTB mode. */
 enum class MtbDifficulty(val scale: Int, val label: String, val color: Color) {

@@ -993,6 +993,7 @@ class OverpassClient(
         val uses = LinkedHashSet<UseType>()
         uses.add(UseType.BIKE)
         if (tags["foot"] != "no") uses.add(UseType.WALK)
+        if (horseAllowed(tags)) uses.add(UseType.HORSE)
         return uses
     }
 
@@ -1064,6 +1065,16 @@ class OverpassClient(
         else SurfaceType.inferFromHighway(tags["highway"])
     }
 
+    /**
+     * Open to horses: a bridleway unless it says otherwise, or anything tagged horse=yes /
+     * designated / permissive. OSM leaves `horse` off most paths, so an untagged path is not
+     * assumed to allow them.
+     */
+    private fun horseAllowed(tags: Map<String, String>): Boolean {
+        val horse = tags["horse"]
+        return horse in HORSE_ALLOWED || (tags["highway"] == "bridleway" && horse != "no")
+    }
+
     private fun segmentUses(tags: Map<String, String>): Set<UseType> {
         val highway = tags["highway"]
         val bicycle = tags["bicycle"]
@@ -1077,6 +1088,7 @@ class OverpassClient(
         if (foot != "no" && (walkByType || walkByTag)) uses.add(UseType.WALK)
         // cycleway allows walking unless foot=no
         if (highway == "cycleway" && foot != "no") uses.add(UseType.WALK)
+        if (horseAllowed(tags)) uses.add(UseType.HORSE)
 
         if (uses.isEmpty()) uses.add(UseType.WALK)
         return uses
@@ -1139,6 +1151,7 @@ class OverpassClient(
         const val PARK_REUSE_FRACTION = 0.5
         val BICYCLE_ALLOWED = setOf("yes", "designated", "permissive")
         val FOOT_ALLOWED = setOf("yes", "designated", "permissive")
+        val HORSE_ALLOWED = setOf("yes", "designated", "permissive")
         val WALK_HIGHWAYS = setOf("path", "footway", "track", "bridleway")
     }
 }

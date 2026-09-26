@@ -433,5 +433,8 @@ fun UseIcons(
         if (UseType.BIKE in uses) {
             Icon(Icons.Filled.DirectionsBike, contentDescription = "Biking", tint = tint, modifier = Modifier.size(size.dp))
         }
+        if (UseType.HORSE in uses) {
+            Icon(HorseIcon, contentDescription = "Horseback", tint = tint, modifier = Modifier.size(size.dp))
+        }
     }
 }

@@ -62,7 +62,7 @@ data class TrailsUiState(
     val trailsVersion: Int = 0,
     val selectedSurfaces: Set<SurfaceType> =
         setOf(SurfaceType.PAVED, SurfaceType.GRAVEL, SurfaceType.DIRT, SurfaceType.UNKNOWN),
-    val selectedUses: Set<UseType> = setOf(UseType.WALK, UseType.BIKE),
+    val selectedUses: Set<UseType> = UseType.entries.toSet(),
     val minLengthMiles: Double = 0.0,
     val query: String = "",
     val savedIds: Set<String> = emptySet(),

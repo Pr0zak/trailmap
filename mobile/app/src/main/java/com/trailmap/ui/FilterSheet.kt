@@ -258,6 +258,12 @@ internal fun FilterSheetContent(ui: TrailsUiState, filters: FilterActions, onDon
                 label = { Text("Bike") },
                 leadingIcon = { Icon(Icons.Filled.DirectionsBike, null, Modifier.size(FilterChipDefaults.IconSize)) },
             )
+            FilterChip(
+                selected = UseType.HORSE in ui.selectedUses,
+                onClick = { filters.toggleUse(UseType.HORSE) },
+                label = { Text("Horse") },
+                leadingIcon = { Icon(HorseIcon, null, Modifier.size(FilterChipDefaults.IconSize)) },
+            )
         }
 
         Spacer(Modifier.height(12.dp))
