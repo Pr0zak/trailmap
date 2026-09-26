@@ -89,9 +89,10 @@ private const val LAYER_TRAILS_CASING = "trails-line-casing"
 private const val SRC_HIGHLIGHT = "trail-highlight"
 private const val LAYER_HIGHLIGHT = "trail-highlight-line"
 private const val EMPTY_FC = """{"type":"FeatureCollection","features":[]}"""
-private const val STYLE_LIGHT = "asset://osm_raster_style.json"
-// OpenFreeMap's dark vector style: keyless and unmetered. CARTO's dark_all raster, used
-// before, started answering every tile with an "API KEY REQUIRED" placeholder.
+// OpenFreeMap vector styles: keyless and unmetered, and fine to download for offline use. CARTO's
+// dark_all raster (dark, before 0.15.0) started answering every tile with "API KEY REQUIRED"; OSM's
+// raster tiles (light, before 0.17.0) forbid the bulk downloading an offline area is.
+private const val STYLE_LIGHT = "https://tiles.openfreemap.org/styles/liberty"
 private const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
 @SuppressLint("MissingPermission")

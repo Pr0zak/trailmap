@@ -25,7 +25,11 @@ data class OfflineArea(
     val requiredTiles: Long,
     val region: OfflineRegion,
 ) {
-    /** The box this area was downloaded for, so its trail data can be checked or fetched. */
+    /** The map style it was downloaded with; tiles of any other style don't help offline. */
+    val styleUrl: String?
+        get() = runCatching { region.definition.styleURL }.getOrNull()
+
+    /** The box this area was downloaded for, so its trail coverage can be checked. */
     val bounds: ViewBounds?
         get() = runCatching {
             val b = region.definition.bounds ?: return null
@@ -38,24 +42,28 @@ data class OfflineArea(
  * (the current view, or a preset metro/state bbox) for offline use, list them with live progress,
  * and delete them.
  *
- * MapLibre's offline downloader fetches the style over the HTTP stack — it can't read asset:// —
- * so [styleUrl] returns the hosted raster style JSON on the public repo's main branch. The remote
- * raster tile URLs referenced inside that style are what MapLibre downloads + caches.
+ * Both basemaps are OpenFreeMap vector styles (keyless, no usage limits), fetched over https, and
+ * MapLibre downloads the style plus its vector tiles, glyphs and sprites. Up to 0.16.0 the light
+ * map was OSM's raster tiles, whose usage policy forbids bulk downloading — which is exactly what
+ * an offline area is. Areas saved with a style the app no longer draws are flagged
+ * ([isCurrentStyle]) so they can be downloaded again.
  *
  * All MapLibre offline callbacks fire on the main thread, so the lambdas here (which set Compose
  * state) are safe to call directly from them.
  */
 object OfflinePacks {
-    private const val LIGHT_STYLE =
-        "https://raw.githubusercontent.com/Pr0zak/trailmap/main/mobile/app/src/main/assets/osm_raster_style.json"
-    // Already an http(s) style, so it needs no hosted copy. Must match STYLE_DARK in MapScreen.
+    // Must match STYLE_LIGHT / STYLE_DARK in MapScreen.
+    private const val LIGHT_STYLE = "https://tiles.openfreemap.org/styles/liberty"
     private const val DARK_STYLE = "https://tiles.openfreemap.org/styles/dark"
 
     private const val MAX_RETRIES = 4
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
 
-    /** Hosted raster style URL for the active theme (offline downloader needs http(s), not asset://). */
+    /** Style URL for the active theme. */
     fun styleUrl(dark: Boolean): String = if (dark) DARK_STYLE else LIGHT_STYLE
+
+    /** One of the styles the map draws today. */
+    fun isCurrentStyle(url: String): Boolean = url == LIGHT_STYLE || url == DARK_STYLE
 
     /** Raise the per-region tile cap before any download (default is 6000, too small for state-wide). */
     fun ensureLimit(context: Context) {
