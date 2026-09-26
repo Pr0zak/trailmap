@@ -73,6 +73,18 @@ class RideMatchTest {
         assertEquals(1, v.riddenPaths.size)
     }
 
+    @Test fun riddenStretchKeepsTheTrailsVerticesNotEverySample() {
+        // 2 km of trail with a vertex every 100 m (21 vertices) is sampled every 10 m (200
+        // pieces); the stretch drawn for it should carry the vertices, not 200 points.
+        val index = TrackIndex(listOf(track("s:1", "cycling", 1_000, line(-50.0, 10.0, 2050.0, 10.0))))
+        val stretch = index.visits(main)!!.riddenPaths.single()
+        assertTrue("points ${stretch.size}", stretch.size <= 22)
+        assertTrue(Geo.haversineMeters(stretch.first(), at(0.0, 0.0)) < 1)
+        assertTrue(Geo.haversineMeters(stretch.last(), at(2000.0, 0.0)) < 1)
+        // Still the same line: its length is the trail's.
+        assertEquals(2000.0, Geo.lengthMeters(stretch), 5.0)
+    }
+
     @Test fun parallelRoadFortyMetresAwayDoesNot() {
         val index = TrackIndex(listOf(track("s:1", "cycling", 1_000, line(0.0, 40.0, 2000.0, 40.0))))
         assertNull(index.visits(main))

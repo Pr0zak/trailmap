@@ -186,14 +186,15 @@ class ScreenSnapshots {
     }
 
     @Composable
-    private fun Detail(id: String, ui: TrailsUiState = Samples.uiYou) = TrailDetailContent(
+    private fun Detail(id: String, ui: TrailsUiState = Samples.uiYou, expanded: Boolean = false) = TrailDetailContent(
         trail = ui.trails.first { it.id == id }, profile = Samples.profile, ui = ui,
         onBack = {}, onToggleSaved = {}, onCreateRide = { _, _ -> }, onAddToRide = { _, _ -> },
-        visits = ui.visits[id],
+        visits = ui.visits[id], ridesExpanded = expanded,
     )
 
     /** Part-ridden: coverage, the ride list, and the time at your own pace. */
     @Test fun detail_you() = shot { Detail("name_indian_creek_trail") }
+    @Test fun detail_you_expanded() = shot { Detail("name_indian_creek_trail", expanded = true) }
     @Test fun detail_you_mtb() = shot { Detail("name_rocky_ridge", Samples.uiMtbYou) }
     @Test fun detail_not_ridden() = shot { Detail("name_line_creek_trail") }
 

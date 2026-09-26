@@ -49,7 +49,17 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.compose.foundation.Canvas
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.width
@@ -129,6 +139,8 @@ internal fun TrailDetailContent(
     chartScrub: Float? = null,
     visits: TrailVisits? = null,
     onOpenRecorded: (String) -> Unit = {},
+    /** Open "Your rides here" from the start (snapshots); the screen starts it collapsed. */
+    ridesExpanded: Boolean = false,
 ) {
     val context = LocalContext.current
     var showAddToRide by remember { mutableStateOf(false) }
@@ -233,7 +245,9 @@ internal fun TrailDetailContent(
                 .verticalScroll(rememberScrollState()),
         ) {
             RoutePreview(
-                trail, marker = scrubPoint, onShowOnMap = { onShowOnMap(trail) },
+                // A provider, not the value: the scrub position is read while drawing, so
+                // dragging along the elevation chart doesn't recompose this whole page.
+                trail, marker = { scrubPoint }, onShowOnMap = { onShowOnMap(trail) },
                 ridden = visits?.riddenPaths.orEmpty(),
             )
 
@@ -289,7 +303,7 @@ internal fun TrailDetailContent(
                     }
                 }
 
-                if (ui.recorded.isNotEmpty()) YourRidesHere(trail, visits, ui, onOpenRecorded)
+                if (ui.recorded.isNotEmpty()) YourRidesHere(trail, visits, ui, onOpenRecorded, ridesExpanded)
 
                 if (trail.surfaceMix.size > 1) {
                     Column {
@@ -386,70 +400,136 @@ private fun ConditionCard(status: TrailStatus) {
 }
 
 /**
- * What your recorded rides say about this trail: how much of it you've covered, how often
- * and when, and the rides themselves. "Not yet" is said plainly — that's the useful answer
- * when picking somewhere new.
+ * What your recorded rides say about this trail. Collapsed by default to one summary line and
+ * the coverage bar — a long-ridden trail lists dozens of rides, and open by default that list
+ * took over the page. Tapping the card opens coverage details and the rides themselves.
+ * "Not yet" is said plainly: that's the useful answer when picking somewhere new.
  */
 @Composable
-private fun YourRidesHere(trail: Trail, visits: TrailVisits?, ui: TrailsUiState, onOpenRecorded: (String) -> Unit) {
+private fun YourRidesHere(
+    trail: Trail,
+    visits: TrailVisits?,
+    ui: TrailsUiState,
+    onOpenRecorded: (String) -> Unit,
+    startExpanded: Boolean = false,
+) {
     val dark = darkTheme()
-    Column {
-        SectionTitle("Your rides here")
-        when {
-            visits == null -> Text(
+    if (visits == null) {
+        Column {
+            SectionTitle("Your rides here")
+            Text(
                 if (UseType.BIKE in trail.uses) "You haven't ridden this one yet." else "You haven't been on this one yet.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            else -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                if (visits.ridden) {
+        }
+        return
+    }
+    var expanded by rememberSaveable(trail.id) { mutableStateOf(startExpanded) }
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        // Animated inside the Surface, so the card keeps its rounded shape as it grows.
+        Column(
+            Modifier.animateContentSize().padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            // Only the header toggles: taps on the details or between the rides mean
+            // something else, and TalkBack gets a button with its expanded state.
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable(
+                        onClickLabel = if (expanded) "Collapse" else "Expand",
+                        role = Role.Button,
+                    ) { expanded = !expanded }
+                    .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Your rides here", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                     Text(
-                        "Ridden %.1f of %.1f mi (%d%%)".format(
-                            visits.riddenMeters / METERS_PER_MILE, visits.totalMeters / METERS_PER_MILE, (visits.riddenFraction * 100).roundToInt(),
-                        ),
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    CoverageBar(visits.riddenFraction, dark)
-                    val first = visits.rides.mapNotNull { ui.recordedById[it]?.start }.minOrNull()
-                    Text(
-                        listOfNotNull(
-                            if (visits.rides.size == 1) "1 ride" else "${visits.rides.size} rides",
-                            first?.takeIf { visits.rides.size > 1 }?.let { "first ${shortDate(it)}" },
-                            visits.lastRidden?.let { "last ${shortDate(it)}" },
-                        ).joinToString(" · "),
+                        visitSummary(visits),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    if (visits.riddenFraction < 0.9) {
-                        Text(
-                            "The blue edge on the map marks what you've ridden.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
                 }
-                if (visits.onFoot.isNotEmpty()) {
-                    Text(
-                        "On foot ${visits.onFoot.size}×" + (visits.lastOnFoot?.let { " · last ${shortDate(it)}" } ?: "") +
-                            " · %d%% of it".format((visits.onFootFraction * 100).roundToInt()),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                var showAll by remember(trail.id) { mutableStateOf(false) }
-                val all = (visits.rides + visits.onFoot).mapNotNull { ui.recordedById[it] }.sortedByDescending { it.start }
-                (if (showAll) all else all.take(RECENT_VISITS)).forEach { rec ->
-                    RecordedRow(rec, onClick = { onOpenRecorded(rec.id) })
-                }
-                if (all.size > RECENT_VISITS) {
-                    TextButton(onClick = { showAll = !showAll }) {
-                        Text(if (showAll) "Show fewer" else "Show all ${all.size}")
-                    }
-                }
+                Icon(
+                    if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
+            if (visits.ridden) CoverageBar(visits.riddenFraction, dark)
+            if (expanded) RidesHereDetail(trail.id, visits, ui, onOpenRecorded)
         }
     }
+}
+
+/** "69 rides · 100% ridden · last Jun 15", or the on-foot equivalent. */
+private fun visitSummary(v: TrailVisits): String = listOfNotNull(
+    when {
+        v.ridden -> (if (v.rides.size == 1) "1 ride" else "${v.rides.size} rides") + " · %d%% ridden".format((v.riddenFraction * 100).roundToInt())
+        else -> "On foot ${v.onFoot.size}× · %d%% of it".format((v.onFootFraction * 100).roundToInt())
+    },
+    listOfNotNull(v.lastRidden, v.lastOnFoot).maxOrNull()?.let { "last ${shortDate(it)}" },
+).joinToString(" · ")
+
+/** The opened card: coverage in miles, first and last, time on foot, and the rides. */
+@Composable
+private fun RidesHereDetail(trailId: String, visits: TrailVisits, ui: TrailsUiState, onOpenRecorded: (String) -> Unit) {
+    // Only worked out once the card is open, and once per visits/recordings, not per frame.
+    val all = remember(visits, ui.recorded) {
+        (visits.rides + visits.onFoot).mapNotNull { ui.recordedById[it] }.sortedByDescending { it.start }
+    }
+    if (visits.ridden) {
+        Text(
+            "Ridden %.1f of %.1f mi".format(visits.riddenMeters / METERS_PER_MILE, visits.totalMeters / METERS_PER_MILE),
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.SemiBold,
+        )
+        val first = all.lastOrNull { it.kind.ride }?.start
+        Text(
+            listOfNotNull(
+                first?.takeIf { visits.rides.size > 1 }?.let { "first ${shortDate(it)}" },
+                visits.lastRidden?.let { "last ${shortDate(it)}" },
+            ).joinToString(" · "),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (visits.riddenFraction < 0.9) {
+            Text(
+                "The blue edge on the map marks what you've ridden.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    if (visits.ridden && visits.onFoot.isNotEmpty()) {
+        Text(
+            "On foot ${visits.onFoot.size}×" + (visits.lastOnFoot?.let { " · last ${shortDate(it)}" } ?: "") +
+                " · %d%% of it".format((visits.onFootFraction * 100).roundToInt()),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    // Saved like the card's open state, so coming back from a ride finds the same list.
+    var showAll by rememberSaveable(trailId) { mutableStateOf(false) }
+    (if (showAll) all else all.take(RECENT_VISITS)).forEach { rec ->
+        RecordedRow(rec, onClick = { onOpenRecorded(rec.id) })
+    }
+    if (all.size > RECENT_VISITS) {
+        TextButton(onClick = { showAll = !showAll }) {
+            Text(if (showAll) "Show fewer" else "Show all ${all.size}")
+        }
+    }
+}
+
+/** Where [RoutePreview]'s cached drawing put the route, shared with its marker overlay. */
+private class Projection {
+    var toScreen: ((GeoPoint) -> Offset)? = null
 }
 
 /** How many of your visits the detail screen lists before "Show all". */
@@ -477,7 +557,7 @@ private fun SectionTitle(text: String) = Text(
  * chart's scrub position) is drawn as a larger dot in the theme's primary color.
  */
 @Composable
-private fun RoutePreview(trail: Trail, marker: GeoPoint?, onShowOnMap: () -> Unit, ridden: List<List<GeoPoint>> = emptyList()) {
+private fun RoutePreview(trail: Trail, marker: () -> GeoPoint?, onShowOnMap: () -> Unit, ridden: List<List<GeoPoint>> = emptyList()) {
     val glow = youColor(darkTheme()).copy(alpha = 0.5f)
     val bg = MaterialTheme.colorScheme.surfaceContainerHigh
     val grid = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
@@ -489,62 +569,103 @@ private fun RoutePreview(trail: Trail, marker: GeoPoint?, onShowOnMap: () -> Uni
     // Most trails are a few dozen ways and order in well under a millisecond, so do those in
     // place; only a very large one (a long MTB system) is handed to a background thread.
     val quick = remember(trail) { if (trail.paths.size <= SYNC_ORDER_MAX_PATHS) TrailRoute.order(trail.paths) else null }
+    // Always written: produceState keeps its value across a new trail, and a quick order left
+    // unwritten would put the start/end dots on the previous trail's geometry.
     val runs by produceState(quick ?: emptyList(), trail) {
-        if (quick == null) value = withContext(Dispatchers.Default) { TrailRoute.order(trail.paths) }
+        value = quick ?: withContext(Dispatchers.Default) { TrailRoute.order(trail.paths) }
     }
+    // The cached layer's projection, for the marker overlay drawn on top of it.
+    val projection = remember(trail) { Projection() }
     Box(Modifier.fillMaxWidth().height(190.dp).background(bg)) {
-        Canvas(Modifier.fillMaxSize().padding(20.dp)) {
-            val all = trail.paths.flatten()
-            if (all.size < 2) return@Canvas
-            // Equirectangular with a cos(lat) squeeze so the shape isn't stretched east-west.
-            val k = cos(Math.toRadians(trail.center.lat))
-            val xs = all.map { it.lon * k }
-            val ys = all.map { it.lat }
-            val w = (xs.max() - xs.min()).coerceAtLeast(1e-6)
-            val h = (ys.max() - ys.min()).coerceAtLeast(1e-6)
-            val scale = min(size.width / w, size.height / h).toFloat()
-            val ox = (size.width - w.toFloat() * scale) / 2
-            val oy = (size.height - h.toFloat() * scale) / 2
-            fun pt(p: GeoPoint) = Offset(
-                ox + ((p.lon * k - xs.min()) * scale).toFloat(),
-                oy + ((ys.max() - p.lat) * scale).toFloat(),
-            )
-            for (i in 0..6) {
-                val gx = size.width * i / 6f
-                drawLine(grid, Offset(gx, -20f), Offset(gx, size.height + 20f), 1f)
-            }
-            for (i in 0..3) {
-                val gy = size.height * i / 3f
-                drawLine(grid, Offset(-20f, gy), Offset(size.width + 20f, gy), 1f)
-            }
-            // What you've ridden glows under the line, as on the map.
-            ridden.filter { it.size >= 2 }.forEach { path ->
-                val line = Path().apply {
-                    moveTo(pt(path[0]).x, pt(path[0]).y)
-                    path.drop(1).forEach { lineTo(pt(it).x, pt(it).y) }
-                }
-                drawPath(line, glow, style = Stroke(22f, cap = StrokeCap.Round, join = StrokeJoin.Round))
-            }
-            trail.paths.filter { it.size >= 2 }.forEach { path ->
-                val line = Path().apply {
-                    moveTo(pt(path[0]).x, pt(path[0]).y)
-                    path.drop(1).forEach { lineTo(pt(it).x, pt(it).y) }
-                }
-                drawPath(line, casing, style = Stroke(12f, cap = StrokeCap.Round, join = StrokeJoin.Round))
-                drawPath(line, lineColor, style = Stroke(7f, cap = StrokeCap.Round, join = StrokeJoin.Round))
-            }
-            runs.firstOrNull()?.let { first ->
-                val last = runs.last()
-                drawCircle(casing, 12f, pt(first.first()))
-                drawCircle(lineColor, 9f, pt(first.first()))
-                drawCircle(lineColor, 11f, pt(last.last()))
-                drawCircle(casing, 6f, pt(last.last()))
-            }
-            marker?.let {
-                drawCircle(casing, 18f, pt(it))
-                drawCircle(markerColor, 13f, pt(it))
-            }
-        }
+        Spacer(
+            Modifier
+                .fillMaxSize()
+                // Its own offscreen layer: scrolling the page moves a cached image instead of
+                // redrawing thousands of stroked points on every frame.
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                // Projection and paths are built once per size and trail, not per frame. This
+                // used to recompute the whole trail's min/max inside pt() for every vertex —
+                // quadratic, redone on each frame of a scroll — which on a 20-mile greenway with
+                // its ridden overlay was tens of millions of operations a frame.
+                .drawWithCache {
+                    var minX = Double.MAX_VALUE; var maxX = -Double.MAX_VALUE
+                    var minY = Double.MAX_VALUE; var maxY = -Double.MAX_VALUE
+                    var count = 0
+                    // Equirectangular with a cos(lat) squeeze so the shape isn't stretched east-west.
+                    val k = cos(Math.toRadians(trail.center.lat))
+                    for (path in trail.paths) for (p in path) {
+                        val x = p.lon * k
+                        if (x < minX) minX = x
+                        if (x > maxX) maxX = x
+                        if (p.lat < minY) minY = p.lat
+                        if (p.lat > maxY) maxY = p.lat
+                        count++
+                    }
+                    if (count < 2) return@drawWithCache onDrawBehind {}
+                    // The inset is drawn, not laid out: an offscreen layer clips to its bounds,
+                    // and the start/end dots and the line's caps reach past the route's box.
+                    val inset = 20.dp.toPx()
+                    val boxW = (size.width - 2 * inset).coerceAtLeast(1f)
+                    val boxH = (size.height - 2 * inset).coerceAtLeast(1f)
+                    val w = (maxX - minX).coerceAtLeast(1e-6)
+                    val h = (maxY - minY).coerceAtLeast(1e-6)
+                    val scale = min(boxW / w, boxH / h)
+                    val ox = inset + (boxW - w * scale) / 2
+                    val oy = inset + (boxH - h * scale) / 2
+                    fun pt(p: GeoPoint) = Offset(
+                        (ox + (p.lon * k - minX) * scale).toFloat(),
+                        (oy + (maxY - p.lat) * scale).toFloat(),
+                    )
+                    projection.toScreen = ::pt
+                    fun path(line: List<GeoPoint>) = Path().apply {
+                        val first = pt(line[0])
+                        moveTo(first.x, first.y)
+                        for (i in 1 until line.size) {
+                            val o = pt(line[i])
+                            lineTo(o.x, o.y)
+                        }
+                    }
+                    val riddenLines = ridden.filter { it.size >= 2 }.map(::path)
+                    val trailLines = trail.paths.filter { it.size >= 2 }.map(::path)
+                    val start = runs.firstOrNull()?.firstOrNull()?.let(::pt)
+                    val end = runs.lastOrNull()?.lastOrNull()?.let(::pt)
+                    val glowStroke = Stroke(22f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    val casingStroke = Stroke(12f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    val lineStroke = Stroke(7f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    onDrawBehind {
+                        for (i in 0..6) {
+                            val gx = inset + boxW * i / 6f
+                            drawLine(grid, Offset(gx, inset - 20f), Offset(gx, inset + boxH + 20f), 1f)
+                        }
+                        for (i in 0..3) {
+                            val gy = inset + boxH * i / 3f
+                            drawLine(grid, Offset(inset - 20f, gy), Offset(inset + boxW + 20f, gy), 1f)
+                        }
+                        // What you've ridden glows under the line, as on the map.
+                        for (line in riddenLines) drawPath(line, glow, style = glowStroke)
+                        for (line in trailLines) {
+                            drawPath(line, casing, style = casingStroke)
+                            drawPath(line, lineColor, style = lineStroke)
+                        }
+                        if (start != null && end != null) {
+                            drawCircle(casing, 12f, start)
+                            drawCircle(lineColor, 9f, start)
+                            drawCircle(lineColor, 11f, end)
+                            drawCircle(casing, 6f, end)
+                        }
+                    }
+                },
+        )
+        // The scrub marker, outside the cached layer: moving it redraws two circles, not the
+        // whole route. Drawn after the layer, so the projection above is already set.
+        Spacer(
+            Modifier.fillMaxSize().drawBehind {
+                val at = marker() ?: return@drawBehind
+                val toScreen = projection.toScreen ?: return@drawBehind
+                drawCircle(casing, 18f, toScreen(at))
+                drawCircle(markerColor, 13f, toScreen(at))
+            },
+        )
         Surface(
             onClick = onShowOnMap,
             shape = RoundedCornerShape(50),

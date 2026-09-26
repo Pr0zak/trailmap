@@ -158,22 +158,28 @@ class TrackIndex(tracks: List<RecordedTrack>) {
         val riddenPaths = ArrayList<List<GeoPoint>>()
         var run: ArrayList<GeoPoint>? = null
         var runPath = -1
+        var runSeg = -1
         for (piece in m.pieces) {
             val hits = piece.hits
             val byRide = hits != null && hits.any { it in rideSet }
             val byFoot = hits != null && hits.any { it in footSet }
             if (byRide) riddenMeters += piece.meters
             if (byFoot) footMeters += piece.meters
-            // Consecutive ridden pieces of one path become one polyline.
+            // Consecutive ridden pieces of one path become one polyline. Pieces of the same
+            // segment are collinear, so the run's last point moves along instead of adding one:
+            // the stretch keeps only the trail's own vertices and its two ends, not a point
+            // every 10 m. That was ~3,300 points for a 20-mile greenway, drawn with a wide
+            // stroke on every scroll frame of the trail page and in the map's ridden layer.
             if (byRide) {
                 val open = run
                 if (open != null && runPath == piece.path && open.last() == piece.a) {
-                    open.add(piece.b)
+                    if (runSeg == piece.seg && open.size >= 2) open[open.lastIndex] = piece.b else open.add(piece.b)
                 } else {
                     if (open != null && open.size >= 2) riddenPaths.add(open)
                     run = arrayListOf(piece.a, piece.b)
                     runPath = piece.path
                 }
+                runSeg = piece.seg
             } else {
                 run?.let { if (it.size >= 2) riddenPaths.add(it) }
                 run = null
@@ -207,7 +213,8 @@ class TrackIndex(tracks: List<RecordedTrack>) {
         }.sortedBy { it.order }
     }
 
-    private class Piece(val path: Int, val a: GeoPoint, val b: GeoPoint, val meters: Double, val hits: IntArray?)
+    /** One sampling step along [path]'s segment [seg], from [a] to [b]. */
+    private class Piece(val path: Int, val seg: Int, val a: GeoPoint, val b: GeoPoint, val meters: Double, val hits: IntArray?)
 
     private class Match(
         val pieces: List<Piece>,
@@ -261,7 +268,7 @@ class TrackIndex(tracks: List<RecordedTrack>) {
                         if (scratch.meters[t] == 0.0) scratch.touched.add(t)
                         scratch.meters[t] += w
                     }
-                    pieces.add(Piece(pi, prev, next, w, hits))
+                    pieces.add(Piece(pi, i, prev, next, w, hits))
                     total += w
                     prev = next
                 }
