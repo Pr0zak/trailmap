@@ -109,6 +109,13 @@ data class Trail(
     val center: GeoPoint,           // centroid-ish, for list/thumbnail
     val mtbScale: Int? = null,      // OSM mtb:scale (0..6) if this is an MTB-rated trail
     val parkName: String? = null,   // name of the OSM park/area containing the trail (MTB mode)
+    /**
+     * Per entry of [paths]: that piece is open to horses. Kept per piece, not per trail, because
+     * long multi-use trails allow horses on only part of their length — the Katy Trail on 11% of
+     * its 240 miles, the Rock Island Trail on 46% — and colouring all of one as a horse trail
+     * would be wrong. Empty means none.
+     */
+    val horsePaths: List<Boolean> = emptyList(),
 ) {
     val lengthMiles: Double get() = lengthMeters / 1609.344
     val distanceMiles: Double get() = distanceMeters / 1609.344

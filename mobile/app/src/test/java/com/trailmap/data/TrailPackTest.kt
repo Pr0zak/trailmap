@@ -177,6 +177,24 @@ class TrailPackTest {
         assertEquals(setOf("Line Creek Trail", "Katy Trail"), names)
     }
 
+    /**
+     * Horse access is kept per piece: a multi-use trail open to horses on part of its length
+     * (the Katy Trail: 11% of 240 miles) must only colour that part.
+     */
+    @Test fun horseAccessIsPerPiece() = runBlocking {
+        val files = tmp.newFolder("files")
+        val horse = """{"type":"way","id":10,"tags":{"name":"Katy Trail","highway":"cycleway","horse":"yes"},""" +
+            """"geometry":[{"lat":38.70,"lon":-92.10},{"lat":38.71,"lon":-92.09}]}"""
+        val plain = """{"type":"way","id":11,"tags":{"name":"Katy Trail","highway":"cycleway"},""" +
+            """"geometry":[{"lat":38.71,"lon":-92.09},{"lat":38.72,"lon":-92.08}]}"""
+        pack(stateFile(files, "missouri"), listOf("missouri"), missouri, tiles = mapOf("all/-369_154.json" to listOf(horse, plain)))
+        val client = OverpassClient(cacheDir = tmp.newFolder("cache"), endpoints = emptyList(), pack = TrailPacks(files))
+        val katy = client.fetchTrails(GeoPoint(38.71, -92.09), 16_000).trails.single()
+        assertEquals(2, katy.paths.size)
+        assertEquals(listOf(false, true), katy.horsePaths.sorted())
+        assertTrue(UseType.HORSE in katy.uses)
+    }
+
     @Test fun wrongSchemaIsIgnored() {
         val files = tmp.newFolder("files")
         pack(stateFile(files, "kansas"), listOf("kansas"), kansas, schema = 999)

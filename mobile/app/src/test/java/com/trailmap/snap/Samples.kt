@@ -50,6 +50,7 @@ object Samples {
         dLat: Double, dLon: Double, bearing: Double, km: Double, seed: Int,
         mtb: Int? = null, park: String? = null,
         mix: Map<SurfaceType, Double> = mapOf(surface to 1.0),
+        horse: Boolean = false,
     ): Trail {
         val start = GeoPoint(KC.lat + dLat, KC.lon + dLon)
         val path = wiggle(start, bearing, km, seed)
@@ -58,7 +59,7 @@ object Samples {
             id = id, name = name, surface = surface, surfaceMix = mix, uses = uses,
             lengthMeters = Geo.lengthMeters(path),
             distanceMeters = dist, paths = listOf(path), center = path[path.size / 2],
-            mtbScale = mtb, parkName = park,
+            mtbScale = mtb, parkName = park, horsePaths = listOf(horse),
         )
     }
 
@@ -78,6 +79,8 @@ object Samples {
         trail("name_kessler_park_trail", "Kessler Park Trail", SurfaceType.DIRT, walk, 0.02, 0.01, 60.0, 2.5, 8, mtb = 0, park = "Kessler Park"),
         trail("name_little_blue_trace", "Little Blue Trace", SurfaceType.GRAVEL, both, -0.02, 0.2, 5.0, 12.0, 9),
         trail("name_town_of_kansas_bridge", "Town of Kansas Bridge Walk", SurfaceType.PAVED, walk, 0.008, -0.004, 30.0, 0.6, 10),
+        trail("name_longview_equestrian_trail", "Longview Equestrian Trail", SurfaceType.DIRT, setOf(UseType.WALK, UseType.HORSE),
+            0.05, 0.12, 140.0, 8.0, 11, horse = true),
     )
 
     val profile: ElevationProfile = run {
@@ -128,7 +131,7 @@ object Samples {
 
 /**
  * Stand-in for the MapLibre view, which can't render off-device: a pale basemap with a few
- * grey roads and the sample trails drawn in their surface colors.
+ * grey roads and the sample trails drawn in their surface colors (horse sections in purple).
  */
 @Composable
 fun FauxMap(trails: List<Trail>, dark: Boolean = false, modifier: Modifier = Modifier.fillMaxSize()) {
@@ -160,13 +163,15 @@ fun FauxMap(trails: List<Trail>, dark: Boolean = false, modifier: Modifier = Mod
             (0.08f + 0.84f * ((p.lon - w) / (e - w)).toFloat()) * size.width,
             (0.12f + 0.76f * (1 - ((p.lat - s) / (n - s)).toFloat())) * size.height,
         )
-        for (t in trails) for (path in t.paths) {
+        for (t in trails) for ((i, path) in t.paths.withIndex()) {
             val p = Path().apply {
                 moveTo(pt(path[0]).x, pt(path[0]).y)
                 path.drop(1).forEach { lineTo(pt(it).x, pt(it).y) }
             }
+            // As the real map in ALL mode: sections open to horses in purple.
+            val color = if (t.horsePaths.getOrElse(i) { false }) Color(if (dark) 0xFFCE93D8 else 0xFF7B1FA2) else surfaceLine(t.surface, dark)
             drawPath(p, Color(0x55000000), style = Stroke(width = 12f, cap = StrokeCap.Round, join = StrokeJoin.Round))
-            drawPath(p, surfaceLine(t.surface, dark), style = Stroke(width = 7f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            drawPath(p, color, style = Stroke(width = 7f, cap = StrokeCap.Round, join = StrokeJoin.Round))
         }
     }
 }

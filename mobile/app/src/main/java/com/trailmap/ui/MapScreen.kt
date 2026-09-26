@@ -160,7 +160,8 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
     LaunchedEffect(ui.filterKey, styleRef.value) {
         val style = styleRef.value ?: return@LaunchedEffect
         val t0 = android.os.SystemClock.elapsedRealtime()
-        val fc = withContext(Dispatchers.Default) { trailsFc(ui.filtered) }
+        // Horse sections get their own color in ALL mode only; MTB colors mean difficulty.
+        val fc = withContext(Dispatchers.Default) { trailsFc(ui.filtered, horse = ui.mode == MapMode.ALL) }
         if (styleRef.value !== style) return@LaunchedEffect // theme flipped mid-build
         style.getSourceAs<GeoJsonSource>(SRC_TRAILS)?.setGeoJson(fc)
         DiagLog.log("map", "drew ${ui.filtered.size} trails, ${fc.length / 1024} KB in ${android.os.SystemClock.elapsedRealtime() - t0} ms")
@@ -567,7 +568,7 @@ private fun MapLegend(mode: MapMode, dark: Boolean, modifier: Modifier = Modifie
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                SURFACE_LINE_COLORS.forEach { (label, colors) ->
+                (SURFACE_LINE_COLORS + ("Horse" to HORSE_LINE_COLOR)).forEach { (label, colors) ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Swatch(Color((if (dark) colors.second else colors.first).toInt()), 14)
                         Spacer(Modifier.size(4.dp))
@@ -601,6 +602,12 @@ private val SURFACE_LINE_COLORS = listOf(
     "Gravel" to (0xFFDAA520 to 0xFFF2C744),
     "Dirt" to (0xFFA0522D to 0xFFCC7A4D),
 )
+
+/**
+ * Sections open to horses, in ALL mode, as (light, dark): purple, which no surface, basemap
+ * road, park or water uses on either map.
+ */
+private val HORSE_LINE_COLOR = 0xFF7B1FA2 to 0xFFCE93D8
 
 /**
  * The card for a tapped trail: stats, plus Save and Add to ride so the common actions don't
@@ -736,8 +743,17 @@ internal fun trailColorExpr(dark: Boolean): Expression {
     )
 }
 
-/** Data-driven line color by "surface", brightened on the dark basemap for contrast. */
-private fun surfaceColorExpr(dark: Boolean): Expression {
+/**
+ * Data-driven line color for unrated lines: purple where the section is open to horses (the
+ * "horse" prop, set in ALL mode only), otherwise by "surface", brightened on the dark basemap.
+ */
+private fun surfaceColorExpr(dark: Boolean): Expression = Expression.switchCase(
+    Expression.eq(Expression.get("horse"), Expression.literal(true)),
+    Expression.color((if (dark) HORSE_LINE_COLOR.second else HORSE_LINE_COLOR.first).toInt()),
+    surfaceOnlyExpr(dark),
+)
+
+private fun surfaceOnlyExpr(dark: Boolean): Expression {
     fun pick(i: Int) = SURFACE_LINE_COLORS[i].second.let { if (dark) it.second else it.first }
     val paved = pick(0)
     val gravel = pick(1) // gold
@@ -755,7 +771,8 @@ private fun surfaceColorExpr(dark: Boolean): Expression {
 
 /**
  * Build a FeatureCollection — one LineString feature per [Trail.paths] entry, tagged with the
- * trail id, surface bucket and mtb:scale — as raw JSON.
+ * trail id, surface bucket, mtb:scale and, when [horse], whether that piece is open to horses —
+ * as raw JSON.
  *
  * Hand-rolled with a StringBuilder rather than kotlinx's buildJsonObject: a Kansas City pull
  * is on the order of 30,000 coordinates, and the builder path allocates a JsonArray plus two
@@ -765,13 +782,13 @@ private fun surfaceColorExpr(dark: Boolean): Expression {
  *
  * Call this off the main thread.
  */
-private fun trailsFc(trails: List<Trail>): String {
+private fun trailsFc(trails: List<Trail>, horse: Boolean = false): String {
     val sb = StringBuilder(1 shl 16)
     sb.append("{\"type\":\"FeatureCollection\",\"features\":[")
     var first = true
     for (trail in trails) {
         val mtb = trail.mtbScale?.toString() ?: "none"
-        for (path in trail.paths) {
+        for ((index, path) in trail.paths.withIndex()) {
             if (path.size < 2) continue
             if (!first) sb.append(',')
             first = false
@@ -779,7 +796,8 @@ private fun trailsFc(trails: List<Trail>): String {
             appendJsonString(sb, trail.id)
             sb.append(",\"surface\":\"").append(trail.surface.name)
             sb.append("\",\"mtb\":\"").append(mtb)
-            sb.append("\"},\"geometry\":{\"type\":\"LineString\",\"coordinates\":[")
+            sb.append("\",\"horse\":").append(horse && trail.horsePaths.getOrElse(index) { false })
+            sb.append("},\"geometry\":{\"type\":\"LineString\",\"coordinates\":[")
             for (i in path.indices) {
                 if (i > 0) sb.append(',')
                 val p = path[i]

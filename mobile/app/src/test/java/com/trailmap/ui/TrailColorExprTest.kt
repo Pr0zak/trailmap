@@ -18,6 +18,14 @@ class TrailColorExprTest {
         surface,
     )
 
+    /** Unrated lines check the "horse" prop before their surface. */
+    @Test fun horseSectionsComeBeforeSurface() {
+        for (dark in listOf(false, true)) {
+            val default = com.google.gson.GsonBuilder().disableHtmlEscaping().create().toJson(trailColorExpr(dark).toArray().last())
+            org.junit.Assert.assertTrue(default, default.startsWith("""["case",["==",["get","horse"],true]"""))
+        }
+    }
+
     @Test fun matchesOriginal() {
         for (dark in listOf(false, true)) {
             val built = trailColorExpr(dark)

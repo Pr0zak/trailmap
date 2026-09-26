@@ -1079,6 +1079,7 @@ class OverpassClient(
             center = mid,
             mtbScale = mtbScale,
             parkName = parkName,
+            horsePaths = members.map { UseType.HORSE in it.uses },
         )
     }
 
