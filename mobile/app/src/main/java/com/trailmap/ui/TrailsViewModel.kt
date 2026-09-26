@@ -1036,7 +1036,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         val trail = trailById(trailId) ?: return
         viewModelScope.launch {
             try {
-                val profile = elevation.profile(trail.allPoints)
+                val profile = elevation.profile(trail.paths)
                 _profiles.update { it + (trailId to profile) }
             } catch (e: Exception) {
                 _profiles.update { it + (trailId to ElevationProfile.EMPTY) }

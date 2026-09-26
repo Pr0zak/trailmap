@@ -234,7 +234,13 @@ private fun systemName(members: List<Trail>): String {
 
 /** One sample along a trail for the elevation chart. */
 /** One elevation sample: distance along the trail, height, and where on the trail it was taken. */
-data class ElevPoint(val distanceMeters: Double, val elevationMeters: Double, val point: GeoPoint? = null)
+data class ElevPoint(
+    val distanceMeters: Double,
+    val elevationMeters: Double,
+    val point: GeoPoint? = null,
+    /** First sample after a gap between a trail's pieces; the chart and climb don't join across it. */
+    val gapBefore: Boolean = false,
+)
 
 data class ElevationProfile(
     val points: List<ElevPoint>,

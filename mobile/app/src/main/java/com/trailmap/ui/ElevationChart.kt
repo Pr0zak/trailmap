@@ -102,12 +102,19 @@ fun ElevationChart(
                         val gy = h * i / 3f
                         drawLine(grid, Offset(0f, gy), Offset(w, gy), 1.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f)))
                     }
+                    // The line lifts across a gap between the trail's pieces; the fill doesn't,
+                    // so the area stays one closed shape.
                     val path = Path().apply {
                         moveTo(x(pts.first().distanceMeters), y(pts.first().elevationMeters))
-                        for (i in 1 until pts.size) lineTo(x(pts[i].distanceMeters), y(pts[i].elevationMeters))
+                        for (i in 1 until pts.size) {
+                            val px = x(pts[i].distanceMeters)
+                            val py = y(pts[i].elevationMeters)
+                            if (pts[i].gapBefore) moveTo(px, py) else lineTo(px, py)
+                        }
                     }
                     val area = Path().apply {
-                        addPath(path)
+                        moveTo(x(pts.first().distanceMeters), y(pts.first().elevationMeters))
+                        for (i in 1 until pts.size) lineTo(x(pts[i].distanceMeters), y(pts[i].elevationMeters))
                         lineTo(x(pts.last().distanceMeters), h)
                         lineTo(x(pts.first().distanceMeters), h)
                         close()

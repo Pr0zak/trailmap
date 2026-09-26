@@ -65,10 +65,14 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextOverflow
 import com.trailmap.data.GeoPoint
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import androidx.compose.runtime.produceState
 import kotlin.math.cos
 import kotlin.math.min
 import com.trailmap.data.ElevationProfile
 import com.trailmap.data.Trail
+import com.trailmap.data.TrailRoute
 import com.trailmap.data.UseType
 import kotlin.math.roundToInt
 
@@ -120,7 +124,7 @@ internal fun TrailDetailContent(
 
     fun openDirections(t: Trail) {
         // Route to where the trail starts, not its centroid, which can sit mid-woods.
-        val start = t.paths.firstOrNull()?.firstOrNull() ?: t.center
+        val start = TrailRoute.order(t.paths).firstOrNull()?.firstOrNull() ?: t.center
         val uri = Uri.parse("geo:${start.lat},${start.lon}?q=${start.lat},${start.lon}(${Uri.encode(t.name)})")
         try {
             context.startActivity(Intent.createChooser(Intent(Intent.ACTION_VIEW, uri), "Directions"))
@@ -280,6 +284,9 @@ private fun usesLine(uses: Set<UseType>): String = when {
     else -> "Trail"
 }
 
+/** Trails with more ways than this are put in riding order off the main thread. */
+private const val SYNC_ORDER_MAX_PATHS = 200
+
 /** Zoom used when "View on map" centres a single trail. */
 private const val TRAIL_FOCUS_ZOOM = 14.0
 
@@ -316,6 +323,14 @@ private fun RoutePreview(trail: Trail, marker: GeoPoint?, onShowOnMap: () -> Uni
     val lineColor = trail.surface.color
     val casing = MaterialTheme.colorScheme.surfaceContainerLowest
     val markerColor = MaterialTheme.colorScheme.primary
+    // Start and end come from the trail's pieces in riding order, the same order the elevation
+    // profile uses — the first and last OSM way were just whichever Overpass listed first.
+    // Most trails are a few dozen ways and order in well under a millisecond, so do those in
+    // place; only a very large one (a long MTB system) is handed to a background thread.
+    val quick = remember(trail) { if (trail.paths.size <= SYNC_ORDER_MAX_PATHS) TrailRoute.order(trail.paths) else null }
+    val runs by produceState(quick ?: emptyList(), trail) {
+        if (quick == null) value = withContext(Dispatchers.Default) { TrailRoute.order(trail.paths) }
+    }
     Box(Modifier.fillMaxWidth().height(190.dp).background(bg)) {
         Canvas(Modifier.fillMaxSize().padding(20.dp)) {
             val all = trail.paths.flatten()
@@ -349,12 +364,13 @@ private fun RoutePreview(trail: Trail, marker: GeoPoint?, onShowOnMap: () -> Uni
                 drawPath(line, casing, style = Stroke(12f, cap = StrokeCap.Round, join = StrokeJoin.Round))
                 drawPath(line, lineColor, style = Stroke(7f, cap = StrokeCap.Round, join = StrokeJoin.Round))
             }
-            val first = trail.paths.first { it.size >= 2 }
-            val last = trail.paths.last { it.size >= 2 }
-            drawCircle(casing, 12f, pt(first.first()))
-            drawCircle(lineColor, 9f, pt(first.first()))
-            drawCircle(lineColor, 11f, pt(last.last()))
-            drawCircle(casing, 6f, pt(last.last()))
+            runs.firstOrNull()?.let { first ->
+                val last = runs.last()
+                drawCircle(casing, 12f, pt(first.first()))
+                drawCircle(lineColor, 9f, pt(first.first()))
+                drawCircle(lineColor, 11f, pt(last.last()))
+                drawCircle(casing, 6f, pt(last.last()))
+            }
             marker?.let {
                 drawCircle(casing, 18f, pt(it))
                 drawCircle(markerColor, 13f, pt(it))
