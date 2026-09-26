@@ -5,7 +5,7 @@ import android.content.Context
 import com.trailmap.data.DiagLog
 import com.trailmap.data.OverpassClient
 import com.trailmap.data.Prefs
-import com.trailmap.data.TrailPack
+import com.trailmap.data.TrailPacks
 import com.trailmap.offline.TrailPackWorker
 import org.maplibre.android.MapLibre
 
@@ -19,12 +19,12 @@ class TrailmapApp : Application() {
 
     companion object {
         private var client: OverpassClient? = null
-        private var trailPack: TrailPack? = null
+        private var trailPacks: TrailPacks? = null
 
-        /** The regional trail pack, shared by the Overpass client and its download job. */
+        /** The state trail packs, shared by the Overpass client and their download job. */
         @Synchronized
-        fun pack(context: Context): TrailPack =
-            trailPack ?: TrailPack(context.applicationContext.filesDir).also { trailPack = it }
+        fun packs(context: Context): TrailPacks =
+            trailPacks ?: TrailPacks(context.applicationContext.filesDir).also { trailPacks = it }
 
         /**
          * The one Overpass client for the process.
@@ -38,7 +38,7 @@ class TrailmapApp : Application() {
         @Synchronized
         fun overpass(context: Context): OverpassClient {
             val app = context.applicationContext
-            return client ?: OverpassClient(app.cacheDir, app.filesDir, Prefs(app), pack = pack(app)).also {
+            return client ?: OverpassClient(app.cacheDir, app.filesDir, Prefs(app), pack = packs(app)).also {
                 client = it
                 DiagLog.log("app", "overpass client created")
             }

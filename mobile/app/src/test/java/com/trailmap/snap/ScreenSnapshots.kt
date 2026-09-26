@@ -146,6 +146,28 @@ class ScreenSnapshots {
         presetTrails = mapOf("KC Metro" to (3 to 9), "Lawrence, KS" to (0 to 1)),
     )
 
+    private val states = listOf(
+        com.trailmap.ui.PackState("kansas", "Kansas", 2_142_458, selected = true, installed = true, osmTimestamp = "2026-09-25T20:24:36Z", nearby = true),
+        com.trailmap.ui.PackState("missouri", "Missouri", 6_405_222, selected = true, installed = false, nearby = true),
+        com.trailmap.ui.PackState("nebraska", "Nebraska", 3_400_000, selected = false, installed = false, nearby = true),
+        com.trailmap.ui.PackState("iowa", "Iowa", 2_900_000, selected = false, installed = false),
+        com.trailmap.ui.PackState("oklahoma", "Oklahoma", 3_100_000, selected = false, installed = false),
+    )
+
+    @Test fun trail_data_states() = shot {
+        com.trailmap.ui.StatesContent(
+            ui = Samples.ui.copy(
+                packStates = states,
+                packDownload = com.trailmap.ui.PackDownload("Missouri", 1, 1, 2_600_000, 6_405_222),
+            ),
+            onBack = {}, onAdd = {}, onRemove = {}, onCheck = {},
+        )
+    }
+
+    @Test fun offline_trail_data() = shot { Offline(Samples.ui.copy(packStates = states)) }
+
+    @Test fun map_state_offer() = shot { Map(Samples.ui.copy(packSuggestion = states[2])) }
+
     @Test fun diagnostics() = shot {
         DiagnosticsContent(Samples.diagLines, onBack = {}, onShare = {}, onClear = {})
     }

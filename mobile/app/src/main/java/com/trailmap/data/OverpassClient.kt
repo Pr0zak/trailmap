@@ -64,8 +64,8 @@ class OverpassClient(
     private val prefs: Prefs? = null,
     /** Overpass mirrors, in default order. Overridable so tests can point at local servers. */
     private val endpoints: List<String> = DEFAULT_ENDPOINTS,
-    /** The downloaded regional pack. Inside it, loads never touch the network. */
-    val pack: TrailPack? = null,
+    /** Downloaded state trail packs. Inside them, loads never touch the network. */
+    val pack: TrailPacks? = null,
 ) {
 
     /** Scope for background cache refreshes, which outlive the load that triggered them. */
@@ -306,7 +306,7 @@ class OverpassClient(
      * around a region already visited costs only the distance filter.
      */
     private fun packElements(
-        pack: TrailPack,
+        pack: TrailPacks,
         kind: String,
         center: GeoPoint,
         radiusMeters: Int,
@@ -324,12 +324,14 @@ class OverpassClient(
             val dx = (n.lon - center.lon) * 111_320.0 * cosLat
             return dx * dx + dy * dy <= r2
         }
-        for ((x, y) in tiles) {
-            val key = "pack_${pack.version}_${kind}_${x}_$y"
-            val elements = synchronized(memo) { memo[key] }?.elements ?: run {
-                val text = pack.tile(kind, x, y) ?: return@run emptyList()
+        // A tile near a state line is in both states' packs, and Geofabrik's extracts overlap
+        // there, so the same way can arrive twice; `seen` keeps the first.
+        val sources = tiles.flatMap { (x, y) -> pack.tileSources(kind, x, y) } + pack.wideSources(kind, center, radiusMeters)
+        for (source in sources) {
+            val elements = synchronized(memo) { memo[source.key] }?.elements ?: run {
+                val text = source.read() ?: return@run emptyList()
                 parsedNow++
-                parseResponse(text).elements.also { memoPut(key, Memoized(it, text.length)) }
+                parseResponse(text).elements.also { memoPut(source.key, Memoized(it, text.length)) }
             }
             for (el in elements) {
                 if ((el.type to el.id) in seen) continue
@@ -339,7 +341,7 @@ class OverpassClient(
         }
         DiagLog.log(
             "cache",
-            "$kind pack, ${tiles.size} tiles ($parsedNow parsed), ${out.size} elements within " +
+            "$kind pack, ${sources.size} tiles ($parsedNow parsed), ${out.size} elements within " +
                 "$radiusMeters m, ${System.currentTimeMillis() - t0} ms",
         )
         return Elements(out, center, radiusMeters)
@@ -1171,8 +1173,12 @@ class OverpassClient(
         val CACHE_TTL_MS = TimeUnit.DAYS.toMillis(7)
         /** Total size of the JSON behind the in-memory parse cache, before LRU eviction. */
         const val MEMO_BUDGET_BYTES = 16L * 1024 * 1024
-        /** Backstop on entry count, so many tiny zoomed-in areas can't accumulate forever. */
-        const val MEMO_MAX_ENTRIES = 48
+        /**
+         * Backstop on entry count, so many tiny zoomed-in areas can't accumulate forever. Pack
+         * tiles are small and a 40 km circle reads ~36 of them per kind, so the byte budget is
+         * the real bound; a low count here would evict a pan's own tiles before the next pan.
+         */
+        const val MEMO_MAX_ENTRIES = 512
         /**
          * Minimum gap between requests actually put on the wire. Overpass instances hand out
          * temporary per-IP blocks, and a map that refetches as you pan is the exact traffic

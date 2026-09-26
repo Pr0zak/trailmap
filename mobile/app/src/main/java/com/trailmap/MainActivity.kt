@@ -49,6 +49,7 @@ import com.trailmap.ui.MapScreen
 import com.trailmap.ui.OfflineScreen
 import com.trailmap.ui.RideDetailScreen
 import com.trailmap.ui.RidesScreen
+import com.trailmap.ui.StatesScreen
 import com.trailmap.ui.TrailDetailScreen
 import com.trailmap.ui.TrailListScreen
 import com.trailmap.ui.TrailsViewModel
@@ -172,7 +173,11 @@ private fun TrailmapRoot(vm: TrailsViewModel) {
                     vm,
                     onBack = { nav.popBackStack() },
                     onOpenDiagnostics = { nav.navigate("diagnostics") },
+                    onOpenStates = { nav.navigate("states") },
                 )
+            }
+            composable("states") {
+                StatesScreen(vm, onBack = { nav.popBackStack() })
             }
             composable("diagnostics") {
                 DiagnosticsScreen(onBack = { nav.popBackStack() })

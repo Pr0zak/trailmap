@@ -29,6 +29,7 @@ import com.trailmap.offline.TrailPackWorker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -108,14 +109,16 @@ data class TrailsUiState(
     val trailQueuedKeys: Set<String> = emptySet(),
     /** Bytes of offline trail data held. Durable, so the user needs to see and manage it. */
     val offlineTrailBytes: Long = 0L,
-    /** The installed regional trail pack; null when there is none. */
-    val pack: PackStatus? = null,
-    /** Trail pack download in progress: bytes done to total. Null when not downloading. */
-    val packDownload: Pair<Long, Long>? = null,
-    /** The trail pack job is waiting — for a connection, or to retry a failed download. */
+    /** Every state with trail data: offered by the release, chosen, or on the phone. */
+    val packStates: List<PackState> = emptyList(),
+    /** A state trail pack downloading now; null when none is. */
+    val packDownload: PackDownload? = null,
+    /** The pack sync is waiting — for a connection, or to retry a failed download. */
     val packWaiting: Boolean = false,
-    /** The last trail pack download gave up after its retries. */
+    /** The last pack sync gave up after its retries. */
     val packFailed: Boolean = false,
+    /** The map is over a state whose trails aren't on the phone: offer it. Null otherwise. */
+    val packSuggestion: PackState? = null,
 ) {
     val radiusMiles: Double get() = radiusMeters / 1609.344
 
@@ -192,13 +195,26 @@ data class TrailsUiState(
     fun isSaved(id: String): Boolean = id in savedIds
 }
 
-/** What the Offline screen says about the installed trail pack. */
-data class PackStatus(
-    val regions: List<String>,
-    /** When the OSM data it was built from was current (ISO-8601), if the extract said. */
-    val osmTimestamp: String?,
+/** One state's trail data, as the Offline and Trail data screens show it. */
+data class PackState(
+    val slug: String,
+    val name: String,
+    /** Download size, from the release; 0 when the release doesn't list it. */
     val bytes: Long,
+    /** The user wants it on the phone. */
+    val selected: Boolean,
+    /** Its trails are on the phone now. */
+    val installed: Boolean,
+    /** When the OSM data on the phone was current (ISO-8601); null when not installed. */
+    val osmTimestamp: String? = null,
+    /** The release has a newer build than the one on the phone. */
+    val updateAvailable: Boolean = false,
+    /** The map is in or next to this state. */
+    val nearby: Boolean = false,
 )
+
+/** Progress of a state pack download: which state, which of how many, and bytes. */
+data class PackDownload(val state: String, val number: Int, val count: Int, val done: Long, val total: Long)
 
 class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = Prefs(app)
@@ -220,6 +236,12 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     // Elevation profiles cached per trail id (lazy-loaded when a detail screen opens).
     private val _profiles = MutableStateFlow<Map<String, ElevationProfile>>(emptyMap())
     val profiles: StateFlow<Map<String, ElevationProfile>> = _profiles.asStateFlow()
+
+    /**
+     * States whose map offer was dismissed this session. Declared before `init`: the pack
+     * watcher started there reads it on its first, synchronous pass.
+     */
+    private val dismissedSuggestions = HashSet<String>()
 
     init {
         watchTrailDownloads()
@@ -305,6 +327,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val here = locator.current()
                 _state.update { it.copy(center = here, focusTarget = CameraTarget(here, DEFAULT_ZOOM)) }
+                chooseDefaultStates(here)
                 load(here, initialFetchRadius())
                 // Hold camera-driven loads off until this one lands, not merely until it has
                 // started: load() only launches the job. Clearing the flag on launch let the
@@ -315,6 +338,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
             } finally {
                 bootstrapPending = false
             }
+            // The index may have landed while the startup load ran; the pack watcher skips
+            // first-run choices until then.
+            chooseDefaultStates(_state.value.center)
         }
     }
 
@@ -532,6 +558,13 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         // staring at a blank metro-wide map, which is strictly worse than partial coverage.
         val canCover = fetchR >= viewR * COVER_RATIO
         _state.update { it.copy(viewBounds = bounds, viewportStale = stale, canAutoCover = canCover) }
+        if (bounds.zoom >= MIN_RECORDABLE_ZOOM) {
+            updatePackSuggestion(center)
+            // "Near the map" follows the map, but only needs redoing when it crosses into
+            // another state's box.
+            val near = overpass.pack?.index?.value?.states.orEmpty().filter { it.near(center, NEARBY_DEG) }.map { it.slug }.toSet()
+            if (near != _state.value.packStates.filter { it.nearby }.map { it.slug }.toSet()) refreshPackStates()
+        }
         if (bootstrapPending) return // the startup load is about to claim this area
         if (!stale || !prev.autoLoadOnPan || bounds.zoom < HARD_ZOOM_FLOOR) return
         // Would this "refetch" just hand back what is already on screen? The gate measures
@@ -760,24 +793,30 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
      * already finished when the app started are history, not news, so they're not announced.
      */
     /**
-     * Mirror the trail pack into UI state, and reload the moment a first pack lands: until then
-     * every load in the region went to Overpass, and a failed or slow one is likely still what
-     * is on screen.
+     * Mirror the state packs into UI state, and reload the moment a new pack covers the map:
+     * until then that area came from Overpass, and a failed or slow load is likely what is still
+     * on screen.
      */
     private fun watchTrailPack() {
-        val pack = overpass.pack ?: return
+        val packs = overpass.pack ?: return
         viewModelScope.launch {
-            var had = pack.ready
-            pack.meta.collect { m ->
-                _state.update {
-                    it.copy(pack = m?.let { meta -> PackStatus(meta.regions, meta.osmTimestamp, pack.bytes()) })
-                }
-                if (m != null && !had) {
-                    DiagLog.log("pack", "ready; reloading the current area from it")
+            var known = packs.installed.value.map { it.id }.toSet()
+            combine(packs.installed, packs.index, packs.selected) { installed, _, _ -> installed }.collect { installed ->
+                refreshPackStates()
+                val ids = installed.map { it.id }.toSet()
+                val added = ids - known
+                known = ids
+                if (added.isNotEmpty()) {
                     val here = lastCamera?.point ?: _state.value.center
-                    if (bootstrapped && !bootstrapPending && overpass.packCovers(here)) load(here, initialFetchRadius())
+                    if (bootstrapped && !bootstrapPending && overpass.packCovers(here)) {
+                        DiagLog.log("pack", "${added.joinToString()} ready; reloading the current area from it")
+                        load(here, initialFetchRadius())
+                    }
                 }
-                had = m != null
+                // First run: the index has just arrived and nothing is chosen yet.
+                if (packs.selectionUnset && packs.index.value != null && bootstrapped && !bootstrapPending) {
+                    chooseDefaultStates(_state.value.center)
+                }
             }
         }
         viewModelScope.launch {
@@ -785,7 +824,15 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 _state.update { s ->
                     s.copy(
                         packDownload = info?.takeIf { it.state == WorkInfo.State.RUNNING }?.progress?.let { p ->
-                            p.getLong(TrailPackWorker.KEY_DONE, 0L) to p.getLong(TrailPackWorker.KEY_TOTAL, 0L)
+                            p.getString(TrailPackWorker.KEY_STATE)?.let { name ->
+                                PackDownload(
+                                    name,
+                                    p.getInt(TrailPackWorker.KEY_NUMBER, 1),
+                                    p.getInt(TrailPackWorker.KEY_COUNT, 1),
+                                    p.getLong(TrailPackWorker.KEY_DONE, 0L),
+                                    p.getLong(TrailPackWorker.KEY_TOTAL, 0L),
+                                )
+                            }
                         },
                         packWaiting = info?.state == WorkInfo.State.ENQUEUED,
                         packFailed = info?.state == WorkInfo.State.FAILED,
@@ -795,15 +842,81 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Fetch the trail pack now — the Offline screen's Download / Update / Retry. */
-    fun downloadTrailPack() = TrailPackWorker.enqueue(getApplication(), force = _state.value.pack == null)
-
-    /** Look for a newer pack now, downloading it only if there is one. */
-    fun checkTrailPack() = TrailPackWorker.enqueue(getApplication(), force = false)
-
-    fun removeTrailPack() {
-        overpass.pack?.remove()
+    /** Rebuild [TrailsUiState.packStates] from the index, the choice and what is on disk. */
+    private fun refreshPackStates() {
+        val packs = overpass.pack ?: return
+        val installed = packs.installedStates()
+        val selected = packs.selected.value
+        val offered = packs.index.value?.states.orEmpty()
+        val here = lastCamera?.point ?: _state.value.center
+        val rows = offered.map { e ->
+            val info = installed[e.slug]
+            PackState(
+                slug = e.slug,
+                name = e.name,
+                // What it takes on the phone once there; the release's size until then.
+                bytes = info?.bytes ?: e.bytes,
+                selected = e.slug in selected,
+                installed = info != null,
+                osmTimestamp = info?.osmTimestamp,
+                updateAvailable = info != null && info.built.isNotEmpty() && e.built.isNotEmpty() && e.built > info.built,
+                nearby = e.near(here, NEARBY_DEG),
+            )
+        } + (installed.keys + selected).filter { slug -> offered.none { it.slug == slug } }.distinct().map { slug ->
+            // On the phone or chosen, but not in the index (not fetched yet, or dropped from the build).
+            val info = installed[slug]
+            PackState(slug, packs.stateName(slug), info?.bytes ?: 0, slug in selected, info != null, info?.osmTimestamp)
+        }
+        _state.update { it.copy(packStates = rows.sortedBy { r -> r.name }) }
+        updatePackSuggestion(lastCamera?.point ?: _state.value.center)
     }
+
+    /**
+     * First run with nothing chosen: take the state (or, on a border, states) the user is in.
+     * That is what makes the map fast out of the box; the Trail data screen changes it.
+     */
+    private fun chooseDefaultStates(here: GeoPoint) {
+        val packs = overpass.pack ?: return
+        if (!packs.selectionUnset) return
+        val states = packs.statesAround(here, DEFAULT_STATES_REACH_M).map { it.slug }.toSet()
+        if (states.isEmpty()) return
+        DiagLog.log("pack", "first run: choosing ${states.joinToString()}")
+        packs.setSelected(states)
+        TrailPackWorker.enqueue(getApplication())
+    }
+
+    /** Offer the state under the map when its trails aren't on the phone. */
+    private fun updatePackSuggestion(center: GeoPoint) {
+        val packs = overpass.pack ?: return
+        val suggestion = if (overpass.packCovers(center)) null else {
+            // Around the map, not just under it: next to a state line the tile also needs the
+            // neighbour, and offering only the state underfoot (already on the phone) would
+            // leave the user wondering why loading is still slow.
+            val slug = packs.statesAround(center, DEFAULT_STATES_REACH_M).map { it.slug }
+                .firstOrNull { it !in packs.selected.value && it !in dismissedSuggestions }
+            _state.value.packStates.firstOrNull { it.slug == slug }
+        }
+        if (suggestion != _state.value.packSuggestion) _state.update { it.copy(packSuggestion = suggestion) }
+    }
+
+    fun dismissPackSuggestion() {
+        _state.value.packSuggestion?.let { dismissedSuggestions += it.slug }
+        _state.update { it.copy(packSuggestion = null) }
+    }
+
+    /** Put a state's trails on the phone. */
+    fun addPackState(slug: String) {
+        overpass.pack?.select(slug) ?: return
+        TrailPackWorker.enqueue(getApplication())
+    }
+
+    /** Take a state's trails off the phone; its pack is deleted straight away. */
+    fun removePackState(slug: String) {
+        overpass.pack?.deselect(slug)
+    }
+
+    /** Look for newer packs now; only changed states are downloaded. */
+    fun checkTrailPacks() = TrailPackWorker.enqueue(getApplication())
 
     private fun watchTrailDownloads() = viewModelScope.launch {
         val seenActive = HashSet<java.util.UUID>()
@@ -1119,6 +1232,12 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
 
         /** Zoom used when a trail-system header recenters the map on a park. */
         private const val SYSTEM_FOCUS_ZOOM = 14.0
+
+        /** "Near the map" on the Trail data screen: within this many degrees of a state's box. */
+        private const val NEARBY_DEG = 0.5
+
+        /** First-run states and the map's offer take every state this close to the map. */
+        private const val DEFAULT_STATES_REACH_M = 25_000.0
 
         /** Wait this long after the camera settles before refetching, to ride out a flick-pan. */
         private const val PAN_DEBOUNCE_MS = 450L

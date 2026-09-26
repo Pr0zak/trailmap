@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -269,6 +270,8 @@ fun MapScreen(vm: TrailsViewModel, onOpenTrail: (String) -> Unit, onOpenOffline:
             onCreateRide = { name, t -> vm.createRide(name, seed = t) },
             onAddToRide = { rideId, t -> vm.addTrailToRide(rideId, t) },
             onClearRide = vm::clearRideHighlight,
+            onGetPackState = vm::addPackState,
+            onDismissPackSuggestion = vm::dismissPackSuggestion,
         )
     }
 }
@@ -293,6 +296,8 @@ internal fun BoxScope.MapOverlays(
     onCreateRide: (String, Trail) -> Unit = { _, _ -> },
     onAddToRide: (String, Trail) -> Unit = { _, _ -> },
     onClearRide: () -> Unit = {},
+    onGetPackState: (String) -> Unit = {},
+    onDismissPackSuggestion: () -> Unit = {},
 ) {
     var showAddToRide by remember { mutableStateOf(false) }
         var showFilters by remember { mutableStateOf(false) }
@@ -356,6 +361,36 @@ internal fun BoxScope.MapOverlays(
                         )
                         IconButton(onClick = onClearRide) {
                             Icon(Icons.Filled.Close, contentDescription = "Stop showing ride")
+                        }
+                    }
+                }
+            }
+
+            // Over a state whose trails aren't on the phone: every load here is a public
+            // Overpass query, so offer the state's pack — a tap, and it downloads in the
+            // background.
+            ui.packSuggestion?.let { st ->
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shadowElevation = 2.dp,
+                ) {
+                    Row(Modifier.padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f, fill = false).padding(vertical = 8.dp)) {
+                            Text(
+                                "Get ${st.name} trails on this phone",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            )
+                            Text(
+                                "Instant loading, even offline · ${megabytes(st.bytes)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            )
+                        }
+                        TextButton(onClick = { onGetPackState(st.slug) }) { Text("Get") }
+                        IconButton(onClick = onDismissPackSuggestion) {
+                            Icon(Icons.Filled.Close, contentDescription = "Not now")
                         }
                     }
                 }

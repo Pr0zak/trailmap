@@ -2,8 +2,8 @@
 
 A personal Android app (Kotlin / Jetpack Compose) that shows nearby walking & biking trails —
 **paved, gravel, dirt** — on a map, colored by surface, with a dedicated **mountain-bike mode**.
-App-only: no backend. Trails for Kansas and Missouri come from a pre-built **trail pack** the app
-downloads once (rebuilt weekly from OpenStreetMap by GitHub Actions); elsewhere it asks OpenStreetMap's
+App-only: no backend. Trails come from pre-built **per-state trail packs** (rebuilt weekly from
+OpenStreetMap by GitHub Actions) for the states you choose in the app; elsewhere it asks OpenStreetMap's
 Overpass API directly.
 
 <p align="center"><em>Built and tested around Kansas City.</em></p>
@@ -45,9 +45,9 @@ Push a `app-vX.Y.Z` tag and GitHub Actions builds + signs the APK and attaches i
 
 - Not a certified navigation aid — a personal trail-discovery tool.
 - Trail names, surfaces, and difficulty come from community OSM data and vary in completeness.
-- The trail pack (`trailpack` release, `.github/workflows/trailpack.yml`) holds OpenStreetMap data,
+- Trail packs (`trailpack` release, `.github/workflows/trailpack.yml`) hold OpenStreetMap data,
   © OpenStreetMap contributors, available under the [ODbL](https://www.openstreetmap.org/copyright).
-  Add states with `--regions` in the workflow.
+  `trailpack/states.txt` lists the states built; remove a line to drop a state from the build.
 
 ## License
 
