@@ -64,7 +64,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.trailmap.data.MtbDifficulty
+import com.trailmap.data.DifficultyTier
+import com.trailmap.data.difficultyText
 import com.trailmap.data.SurfaceType
 import com.trailmap.data.Trail
 import com.trailmap.data.TrailConditions
@@ -343,19 +344,17 @@ internal fun SystemHeader(system: TrailSystem, ridden: Int? = null, condition: T
                 )
                 if (condition != null) ConditionLine(condition, Modifier.padding(top = 4.dp))
             }
-            ScaleRangeChip(system.scaleMin, system.scaleMax)
+            LevelRangeChip(system.levelMin, system.levelMax)
             TextButton(onClick = onClick) { Text("Map") }
         }
     }
 }
 
-/** Difficulty-range pill, e.g. "S1–S4". Renders nothing if no member is rated. */
+/** Difficulty-range pill for a trail system, e.g. "● – ◆" coloured by its hardest trail. */
 @Composable
-internal fun ScaleRangeChip(scaleMin: Int?, scaleMax: Int?) {
-    if (scaleMin == null || scaleMax == null) return
-    val difficulty = MtbDifficulty.of(scaleMax) ?: return
-    val label = if (scaleMin == scaleMax) "S$scaleMin" else "S$scaleMin–S$scaleMax"
-    DifficultyPill(difficulty, label)
+internal fun LevelRangeChip(min: DifficultyTier?, max: DifficultyTier?) {
+    if (min == null || max == null) return
+    DifficultyPill(max, if (min == max) "${max.symbol} ${max.label}" else "${min.symbol} – ${max.symbol}")
 }
 
 /**
@@ -395,9 +394,9 @@ internal fun TrailRow(
                     Spacer(Modifier.width(6.dp))
                     UseIcons(trail.uses, tint = MaterialTheme.colorScheme.onSurfaceVariant, size = 16)
                 }
-                if (trail.mtbScale != null) {
+                if (trail.level != null) {
                     Spacer(Modifier.height(4.dp))
-                    MtbBadge(trail.mtbScale)
+                    LevelBadge(trail.level, trail.mtbScale)
                 }
                 VisitLine(visits, Modifier.padding(top = 3.dp))
             }
@@ -435,16 +434,16 @@ fun SurfaceBadge(surface: SurfaceType, modifier: Modifier = Modifier) {
     }
 }
 
-/** Difficulty pill for MTB-rated trails. Renders nothing when [scale] has no mtb:scale mapping. */
+/** A trail's difficulty pill, e.g. "■ Intermediate · S2". Renders nothing for an unrated trail. */
 @Composable
-fun MtbBadge(scale: Int?, modifier: Modifier = Modifier) {
-    val difficulty = MtbDifficulty.of(scale) ?: return
-    DifficultyPill(difficulty, difficulty.badge, modifier)
+fun LevelBadge(level: DifficultyTier?, scale: Int?, modifier: Modifier = Modifier) {
+    val tier = level ?: DifficultyTier.fromScale(scale) ?: return
+    DifficultyPill(tier, difficultyText(tier, scale), modifier)
 }
 
 /** A pill in [difficulty]'s sign colour; the white one gets an outline to show on a light card. */
 @Composable
-private fun DifficultyPill(difficulty: MtbDifficulty, text: String, modifier: Modifier = Modifier) {
+private fun DifficultyPill(difficulty: DifficultyTier, text: String, modifier: Modifier = Modifier) {
     val shape = RoundedCornerShape(50)
     Box(
         modifier

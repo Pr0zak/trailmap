@@ -1263,7 +1263,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     fun deleteRide(rideId: String) = persistRides(_state.value.rides.filterNot { it.id == rideId })
 
     private fun Trail.toRideTrail() = RideTrail(
-        id = id, name = name, lengthMeters = lengthMeters, surface = surface.name, mtbScale = mtbScale,
+        id = id, name = name, lengthMeters = lengthMeters, surface = surface.name, mtbScale = mtbScale, level = level?.name,
         lat = center.lat, lon = center.lon,
     )
 

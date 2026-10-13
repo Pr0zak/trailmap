@@ -35,7 +35,7 @@ object TrailConditions {
      */
     fun forTrail(trail: Trail, statuses: List<TrailStatus>): TrailStatus? {
         if (statuses.isEmpty()) return null
-        if (trail.mtbScale == null && trail.surface == SurfaceType.PAVED) return null
+        if (trail.level == null && trail.surface == SurfaceType.PAVED) return null
         return trail.parkName?.let { byName(it, listOf(trail), statuses) }
             ?: nearest(listOf(trail), statuses, TRAIL_REACH_M)
     }

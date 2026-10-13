@@ -1,5 +1,6 @@
 package com.trailmap.ui
 
+import com.trailmap.data.DifficultyTier
 import com.trailmap.data.Ride
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -338,7 +339,7 @@ private fun ReorderableTrails(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            MtbBadge(t.mtbScale, Modifier.padding(start = 6.dp))
+                            LevelBadge(DifficultyTier.byName(t.level), t.mtbScale, Modifier.padding(start = 6.dp))
                         }
                     }
                     IconButton(onClick = { onRemoveTrail(t.id) }) {

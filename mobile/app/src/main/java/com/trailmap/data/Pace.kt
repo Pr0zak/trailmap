@@ -39,7 +39,7 @@ data class PersonalPace(
         val usualBike = if (recentEbikeRides > recentBikeRides) ebike ?: bike else bike ?: ebike
         val bikes = UseType.BIKE in trail.uses
         return when {
-            trail.mtbScale != null || (bikes && trail.surface == SurfaceType.DIRT) -> mtb ?: usualBike
+            trail.level != null || (bikes && trail.surface == SurfaceType.DIRT) -> mtb ?: usualBike
             bikes -> usualBike
             else -> walk
         }

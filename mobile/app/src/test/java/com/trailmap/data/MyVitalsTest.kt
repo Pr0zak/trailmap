@@ -226,7 +226,7 @@ class MyVitalsTest {
 
     private fun trailOf(surface: SurfaceType, uses: Set<UseType>, mtb: Int? = null) = Trail(
         "t", "t", surface, mapOf(surface to 1.0), uses, 1000.0, 0.0,
-        listOf(listOf(GeoPoint(39.0, -94.6), GeoPoint(39.01, -94.6))), GeoPoint(39.005, -94.6), mtbScale = mtb,
+        listOf(listOf(GeoPoint(39.0, -94.6), GeoPoint(39.01, -94.6))), GeoPoint(39.005, -94.6), mtbScale = mtb, level = DifficultyTier.fromScale(mtb),
     )
 
     @Test fun paceFollowsTheBikeYouRideNow() {
@@ -261,7 +261,7 @@ class MyVitalsTest {
 
     private fun mtbTrail(name: String, park: String?, lat: Double, lon: Double, surface: SurfaceType = SurfaceType.DIRT) = Trail(
         name, name, surface, mapOf(surface to 1.0), setOf(UseType.BIKE), 1000.0, 0.0,
-        listOf(listOf(GeoPoint(lat, lon), GeoPoint(lat + 0.005, lon))), GeoPoint(lat + 0.0025, lon), mtbScale = 2, parkName = park,
+        listOf(listOf(GeoPoint(lat, lon), GeoPoint(lat + 0.005, lon))), GeoPoint(lat + 0.0025, lon), mtbScale = 2, level = DifficultyTier.BLUE, parkName = park,
     )
 
     @Test fun conditionsMatchSystemsByNameThenDistance() {
@@ -287,7 +287,7 @@ class MyVitalsTest {
 
     @Test fun pavedTrailsDontCloseForRain() {
         val board = listOf(status(3, "Swope Park", 38.99, -94.51))
-        val greenway = mtbTrail("g", "Swope Park", 38.991, -94.511, surface = SurfaceType.PAVED).copy(mtbScale = null)
+        val greenway = mtbTrail("g", "Swope Park", 38.991, -94.511, surface = SurfaceType.PAVED).copy(mtbScale = null, level = null)
         assertNull(TrailConditions.forTrail(greenway, board))
         val single = mtbTrail("s", "Swope Park", 38.991, -94.511)
         assertEquals(3L, TrailConditions.forTrail(single, board)!!.id)

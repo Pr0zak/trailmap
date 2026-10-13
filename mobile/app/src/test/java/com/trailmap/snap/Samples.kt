@@ -70,7 +70,7 @@ object Samples {
             id = id, name = name, surface = surface, surfaceMix = mix, uses = uses,
             lengthMeters = Geo.lengthMeters(path),
             distanceMeters = dist, paths = listOf(path), center = path[path.size / 2],
-            mtbScale = mtb, parkName = park, horseTrailPaths = listOf(horse), horseTrail = horse,
+            mtbScale = mtb, level = com.trailmap.data.DifficultyTier.fromScale(mtb), parkName = park, horseTrailPaths = listOf(horse), horseTrail = horse,
             operator = operator, website = website,
         )
     }
@@ -105,7 +105,7 @@ object Samples {
         ElevationProfile(pts, ascentMeters = 64.0, descentMeters = 43.0, minMeters = pts.minOf { it.elevationMeters }, maxMeters = pts.maxOf { it.elevationMeters })
     }
 
-    private fun rt(t: Trail) = RideTrail(t.id, t.name, t.lengthMeters, t.surface.name, t.mtbScale)
+    private fun rt(t: Trail) = RideTrail(t.id, t.name, t.lengthMeters, t.surface.name, t.mtbScale, level = t.level?.name)
 
     val rides = listOf(
         Ride("r1", "Sunday loop", listOf(rt(trails[0]), rt(trails[1]), rt(trails[9]))),
@@ -144,7 +144,7 @@ object Samples {
     val uiMtb = ui.copy(
         mode = MapMode.MTB,
         radiusMeters = (25 * 1609.344).toInt(),
-        trails = trails.filter { it.mtbScale != null },
+        trails = trails.filter { it.level != null },
         trailsVersion = 2,
     )
 

@@ -20,6 +20,8 @@ data class RideTrail(
     val lengthMeters: Double,
     val surface: String,        // SurfaceType.name
     val mtbScale: Int? = null,
+    /** [DifficultyTier] name; null on rides saved before it was recorded (then [mtbScale] decides). */
+    val level: String? = null,
     // Where the trail is, so "Show ride on map" can go there. Null on rides saved before
     // this was recorded; those still highlight once their trails are loaded.
     val lat: Double? = null,
@@ -77,54 +79,61 @@ enum class HorseTrailFilter(val label: String) { SHOW("Show"), HIDE("Hide"), ONL
 enum class UseType(val label: String) { WALK("Walking"), BIKE("Biking"), HORSE("Horseback") }
 
 /**
- * The trail-sign colour a rating maps to — Trailforks' six-level scale, which extends the
+ * A trail's difficulty as its sign shows it — Trailforks' six-level scale, which extends the
  * ski/IMBA signs: white (easiest), green circle (easy), blue square (intermediate), black
  * diamond (advanced), double black (expert) and orange "pro line" (beyond expert).
+ *
+ * Two OSM tags feed it. `mtb:scale:imba` *is* the posted sign colour (0 white … 4 double
+ * black) and wins when present; `mtb:scale` (S0-S6, technical difficulty) maps onto it
+ * otherwise. They disagree sometimes — Fraggle Rock in KC is signed black but tagged S2 — and
+ * the sign is what a rider sees at the trailhead.
  */
-enum class DifficultyTier(val label: String, val symbol: String) {
-    WHITE("Easiest", "○"),
-    GREEN("Easy", "●"),
-    BLUE("Intermediate", "■"),
-    BLACK("Advanced", "◆"),
-    DOUBLE_BLACK("Expert", "◆◆"),
-    PRO("Pro", "▲"),
-}
+enum class DifficultyTier(val label: String, val symbol: String, val color: Color) {
+    WHITE("Easiest", "○", Color(0xFFFFFFFF)),
+    GREEN("Easy", "●", Color(0xFF2E7D32)),
+    BLUE("Intermediate", "■", Color(0xFF1565C0)),
+    BLACK("Advanced", "◆", Color(0xFF1A1A1A)),
+    DOUBLE_BLACK("Expert", "◆◆", Color(0xFF1A1A1A)),
+    PRO("Pro", "▲", Color(0xFFBF360C));
 
-/**
- * OSM mtb:scale (0..6) mapped to difficulty labels and trail-sign colours: S0 white, S1 green,
- * S2 blue, S3 black, S4 double black, S5-S6 pro (orange). Badge fills keep their label text at
- * >= 4.5:1 ([onColor]); the map's line colours are separate — see TIER_LINE_COLORS in MapScreen.
- */
-enum class MtbDifficulty(val scale: Int, val label: String, val tier: DifficultyTier) {
-    S0(0, "Beginner", DifficultyTier.WHITE),
-    S1(1, "Easy", DifficultyTier.GREEN),
-    S2(2, "Intermediate", DifficultyTier.BLUE),
-    S3(3, "Advanced", DifficultyTier.BLACK),
-    S4(4, "Expert", DifficultyTier.DOUBLE_BLACK),
-    S5(5, "Expert+", DifficultyTier.PRO),
-    S6(6, "Extreme", DifficultyTier.PRO);
-
-    val color: Color get() = when (tier) {
-        DifficultyTier.WHITE -> Color(0xFFFFFFFF)
-        DifficultyTier.GREEN -> Color(0xFF2E7D32)
-        DifficultyTier.BLUE -> Color(0xFF1565C0)
-        DifficultyTier.BLACK, DifficultyTier.DOUBLE_BLACK -> Color(0xFF1A1A1A)
-        DifficultyTier.PRO -> Color(0xFFBF360C)
-    }
-
-    /** Label colour on [color]: dark on the white badge, white on the rest. */
-    val onColor: Color get() = if (tier == DifficultyTier.WHITE) Color(0xFF1A1A1A) else Color.White
+    /** Label colour on [color] (>= 4.5:1): dark on the white badge, white on the rest. */
+    val onColor: Color get() = if (this == WHITE) Color(0xFF1A1A1A) else Color.White
 
     /** The white badge needs an outline to show on a light card. */
-    val outlined: Boolean get() = tier == DifficultyTier.WHITE
-
-    /** Chip text with the sign shape, e.g. "■ S2 · Intermediate", "◆◆ S4 · Expert". */
-    val badge: String get() = "${tier.symbol} S$scale · $label"
+    val outlined: Boolean get() = this == WHITE
 
     companion object {
-        fun of(scale: Int?): MtbDifficulty? = scale?.let { s -> entries.firstOrNull { it.scale == s } }
+        /** OSM mtb:scale S0-S6: S0 white, S1 green, S2 blue, S3 black, S4 double black, S5-S6 pro. */
+        fun fromScale(scale: Int?): DifficultyTier? = when (scale) {
+            0 -> WHITE
+            1 -> GREEN
+            2 -> BLUE
+            3 -> BLACK
+            4 -> DOUBLE_BLACK
+            5, 6 -> PRO
+            else -> null
+        }
+
+        /** OSM mtb:scale:imba, the sign colour: 0 white, 1 green, 2 blue, 3 black, 4 double black. */
+        fun fromImba(imba: Int?): DifficultyTier? = when (imba) {
+            0 -> WHITE
+            1 -> GREEN
+            2 -> BLUE
+            3 -> BLACK
+            4 -> DOUBLE_BLACK
+            else -> null
+        }
+
+        /** The sign colour when tagged, else the S-scale's. */
+        fun of(scale: Int?, imba: Int?): DifficultyTier? = fromImba(imba) ?: fromScale(scale)
+
+        fun byName(name: String?): DifficultyTier? = entries.firstOrNull { it.name == name }
     }
 }
+
+/** Badge text: the sign and its name, plus the S-scale when OSM has one, e.g. "■ Intermediate · S2". */
+fun difficultyText(level: DifficultyTier, scale: Int?): String =
+    "${level.symbol} ${level.label}" + (scale?.let { " · S$it" } ?: "")
 
 /**
  * A logical trail: many OSM way-segments grouped by name and stitched together.
@@ -151,11 +160,12 @@ data class Trail(
      */
     val horseTrailPaths: List<Boolean> = emptyList(),
     /**
-     * Per entry of [paths]: that piece's own mtb:scale, so a loop whose sections are rated
-     * differently is drawn section by section. Null entries (and an empty list) fall back to
-     * [mtbScale], which is the hardest section's rating.
+     * The trail's difficulty: the relation's own rating, else its hardest piece's. Unlike
+     * [mtbScale] it also counts the sign colour (`mtb:scale:imba`), which some trails carry alone.
      */
-    val mtbScalePaths: List<Int?> = emptyList(),
+    val level: DifficultyTier? = null,
+    /** Per entry of [paths]: that piece's difficulty, for colouring the map by section. */
+    val levelPaths: List<DifficultyTier?> = emptyList(),
     /**
      * Per entry of [paths]: 1 when that piece is one-way in its drawn direction, -1 when
      * one-way against it (OSM `oneway=-1`), 0 when two-way. Empty means all two-way.
@@ -184,8 +194,8 @@ data class TrailSystem(
     val trails: List<Trail>,      // members, sorted by distance
     val totalMeters: Double,
     val distanceMeters: Double,   // nearest member
-    val scaleMin: Int?,           // min mtb:scale across members (null if none rated)
-    val scaleMax: Int?,
+    val levelMin: DifficultyTier?,  // easiest member's level (null if none rated)
+    val levelMax: DifficultyTier?,
     val center: GeoPoint,
 ) {
     val totalMiles: Double get() = totalMeters / 1609.344
@@ -233,9 +243,7 @@ fun clusterTrailSystems(trails: List<Trail>, thresholdMeters: Double = 2500.0): 
         val sorted = members.sortedBy { it.distanceMeters }
         val totalMeters = sorted.sumOf { it.lengthMeters }
         val distanceMeters = sorted.minOf { it.distanceMeters }
-        val scales = sorted.mapNotNull { it.mtbScale }
-        val scaleMin = scales.minOrNull()
-        val scaleMax = scales.maxOrNull()
+        val levels = sorted.mapNotNull { it.level }
         val avgLat = sorted.sumOf { it.center.lat } / sorted.size
         val avgLon = sorted.sumOf { it.center.lon } / sorted.size
         TrailSystem(
@@ -244,8 +252,8 @@ fun clusterTrailSystems(trails: List<Trail>, thresholdMeters: Double = 2500.0): 
             trails = sorted,
             totalMeters = totalMeters,
             distanceMeters = distanceMeters,
-            scaleMin = scaleMin,
-            scaleMax = scaleMax,
+            levelMin = levels.minOrNull(),
+            levelMax = levels.maxOrNull(),
             center = GeoPoint(avgLat, avgLon),
         )
     }

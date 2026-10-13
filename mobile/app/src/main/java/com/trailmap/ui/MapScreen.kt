@@ -70,7 +70,6 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.trailmap.data.DifficultyTier
-import com.trailmap.data.MtbDifficulty
 import com.trailmap.data.Amenity
 import com.trailmap.data.AmenityKind
 import com.trailmap.data.DiagLog
@@ -224,7 +223,11 @@ fun MapScreen(
         val style = styleRef.value ?: return@LaunchedEffect
         val t0 = android.os.SystemClock.elapsedRealtime()
         // Horse trails get their own color in ALL mode only; MTB colors mean difficulty.
-        val fc = withContext(Dispatchers.Default) { trailsFc(ui.filtered, horse = ui.mode == MapMode.ALL) }
+        // Levels colour the lines in MTB mode only: in ALL mode the lines key surface, and
+        // "easy" green beside "paved" green would make that legend ambiguous.
+        val fc = withContext(Dispatchers.Default) {
+            trailsFc(ui.filtered, horse = ui.mode == MapMode.ALL, levels = ui.mode == MapMode.MTB)
+        }
         if (styleRef.value !== style) return@LaunchedEffect // theme flipped mid-build
         style.getSourceAs<GeoJsonSource>(SRC_TRAILS)?.setGeoJson(fc)
         DiagLog.log("map", "drew ${ui.filtered.size} trails, ${fc.length / 1024} KB in ${android.os.SystemClock.elapsedRealtime() - t0} ms")
@@ -888,8 +891,6 @@ private val TIER_LINE_COLORS = mapOf(
     DifficultyTier.PRO to (0xFFF57C00 to 0xFFFF9800),
 )
 
-/** mtb:scale 0..6 → its tier's line colour, indexed by scale. */
-private val MTB_LINE_COLORS = MtbDifficulty.entries.map { TIER_LINE_COLORS.getValue(it.tier) }
 
 /** Surface line colors as (light, dark). Shared by the lines and legend. */
 private val SURFACE_LINE_COLORS = listOf(
@@ -949,7 +950,7 @@ private fun TrailPeekCard(
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 SurfaceBadge(trail.surface)
-                MtbBadge(trail.mtbScale, Modifier.padding(start = 6.dp))
+                LevelBadge(trail.level, trail.mtbScale, Modifier.padding(start = 6.dp))
                 if (condition != null) ConditionChip(condition, Modifier.padding(start = 6.dp))
                 Spacer(Modifier.size(8.dp))
                 UseIcons(trail.uses, size = 16)
@@ -1168,11 +1169,7 @@ private fun applyTrailLayers(style: Style, dark: Boolean) {
             PropertyFactory.lineColor(0xFFFFFFFF.toInt()),
             PropertyFactory.lineDasharray(arrayOf(1.5f, 1.5f)),
         ).withFilter(
-            Expression.any(
-                *MtbDifficulty.entries.filter { it.tier == DifficultyTier.DOUBLE_BLACK }
-                    .map { Expression.eq(Expression.get("mtb"), Expression.literal("${it.scale}")) }
-                    .toTypedArray(),
-            ),
+            Expression.eq(Expression.get("lvl"), Expression.literal(DifficultyTier.DOUBLE_BLACK.name)),
         ),
     )
     // One-way pieces: small chevrons along the line pointing the way you may ride, from z13
@@ -1385,16 +1382,17 @@ private fun lineWidthExpr(extra: Float = 0f): Expression =
     )
 
 /**
- * Combined line color: MTB-rated trails (the "mtb" prop is "0".."6") are colored by
- * difficulty; everything else ("none") falls through to the surface color. One expression
- * serves both ALL mode (all "none" → surface colors) and MTB mode (rated → difficulty).
+ * Combined line color: rated pieces (the "lvl" prop is a [DifficultyTier] name) take their
+ * sign colour; everything else ("none") falls through to the surface color. One expression
+ * serves both ALL mode (every piece "none" → surface colors) and MTB mode.
  */
 internal fun trailColorExpr(dark: Boolean): Expression {
-    val stops = MTB_LINE_COLORS.flatMapIndexed { scale, (light, darkColor) ->
-        listOf(Expression.literal("$scale"), Expression.color((if (dark) darkColor else light).toInt()))
+    val stops = DifficultyTier.entries.flatMap { tier ->
+        val (light, darkColor) = TIER_LINE_COLORS.getValue(tier)
+        listOf(Expression.literal(tier.name), Expression.color((if (dark) darkColor else light).toInt()))
     }
     return Expression.match(
-        Expression.get("mtb"),
+        Expression.get("lvl"),
         *stops.toTypedArray(),
         surfaceColorExpr(dark), // default: unrated trails → surface color
     )
@@ -1412,10 +1410,9 @@ private fun difficultyCasingExpr(dark: Boolean): Expression {
     } else {
         setOf(DifficultyTier.WHITE) to 0xE6333333.toInt()
     }
-    val stops = MtbDifficulty.entries.filter { it.tier in vanishing }
     return Expression.match(
-        Expression.get("mtb"),
-        *stops.flatMap { listOf(Expression.literal("${it.scale}"), Expression.color(casing)) }.toTypedArray(),
+        Expression.get("lvl"),
+        *vanishing.flatMap { listOf(Expression.literal(it.name), Expression.color(casing)) }.toTypedArray(),
         normal,
     )
 }
@@ -1459,21 +1456,21 @@ private fun surfaceOnlyExpr(dark: Boolean): Expression {
  *
  * Call this off the main thread.
  */
-private fun trailsFc(trails: List<Trail>, horse: Boolean = false): String {
+private fun trailsFc(trails: List<Trail>, horse: Boolean = false, levels: Boolean = false): String {
     val sb = StringBuilder(1 shl 16)
     sb.append("{\"type\":\"FeatureCollection\",\"features\":[")
     var first = true
     for (trail in trails) {
         for ((index, path) in trail.paths.withIndex()) {
             // Per piece: a loop's sections can be rated differently.
-            val mtb = (trail.mtbScalePaths.getOrNull(index) ?: trail.mtbScale)?.toString() ?: "none"
+            val lvl = if (!levels) "none" else (trail.levelPaths.getOrNull(index) ?: trail.level)?.name ?: "none"
             if (path.size < 2) continue
             if (!first) sb.append(',')
             first = false
             sb.append("{\"type\":\"Feature\",\"properties\":{\"id\":")
             appendJsonString(sb, trail.id)
             sb.append(",\"surface\":\"").append(trail.surface.name)
-            sb.append("\",\"mtb\":\"").append(mtb)
+            sb.append("\",\"lvl\":\"").append(lvl)
             sb.append("\",\"horse\":").append(horse && trail.horseTrailPaths.getOrElse(index) { false })
             sb.append(",\"oneway\":").append(trail.onewayPaths.getOrElse(index) { 0 })
             sb.append("},\"geometry\":{\"type\":\"LineString\",\"coordinates\":[")

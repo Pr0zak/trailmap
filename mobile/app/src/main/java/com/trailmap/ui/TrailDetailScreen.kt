@@ -256,7 +256,7 @@ internal fun TrailDetailContent(
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     SurfaceBadge(trail.surface)
-                    MtbBadge(trail.mtbScale, Modifier.padding(start = 6.dp))
+                    LevelBadge(trail.level, trail.mtbScale, Modifier.padding(start = 6.dp))
                     Spacer(Modifier.size(10.dp))
                     Text(
                         (if (trail.horseTrail) "Horse trail · " else "") +

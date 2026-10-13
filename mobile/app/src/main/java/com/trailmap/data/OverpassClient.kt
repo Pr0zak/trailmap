@@ -562,6 +562,7 @@ class OverpassClient(
             [out:json][timeout:60];
             (
               way["mtb:scale"]["name"](around:$r,$lat,$lon);
+              way["mtb:scale:imba"]["name"](around:$r,$lat,$lon);
               way["highway"="path"]["bicycle"="designated"]["surface"~"ground|dirt|earth|fine_gravel|gravel|compacted"]["name"](around:$r,$lat,$lon);
               relation["route"="mtb"](around:$r,$lat,$lon);
             );
@@ -873,7 +874,11 @@ class OverpassClient(
         val uses: Set<UseType>,
         val length: Double,
         val mtbScale: Int? = null,
-    )
+        /** OSM mtb:scale:imba, the posted sign colour (0-4). */
+        val imba: Int? = null,
+    ) {
+        val level: DifficultyTier? get() = DifficultyTier.of(mtbScale, imba)
+    }
 
     /**
      * ALL-mode parsing: response contains both `way` and `relation` elements.
@@ -943,6 +948,9 @@ class OverpassClient(
                 surface = segmentSurface(el.tags),
                 uses = segmentUses(el.tags),
                 length = Geo.lengthMeters(points),
+                // Rated singletrack turns up in ALL mode too; its level shows on the badges.
+                mtbScale = parseMtbScale(el.tags["mtb:scale"]),
+                imba = parseImba(el.tags["mtb:scale:imba"]),
             )
         }
 
@@ -1000,6 +1008,7 @@ class OverpassClient(
             val relSurface = SurfaceType.fromOsmSurface(rel.tags["surface"])
                 .takeIf { it != SurfaceType.UNKNOWN } ?: SurfaceType.DIRT
             val relScale = parseMtbScale(rel.tags["mtb:scale"])
+            val relImba = parseImba(rel.tags["mtb:scale:imba"])
 
             // Each member keeps its own way's rating and surface when that way is in the
             // response. Reading only the relation's tags left every KC route unrated: none of
@@ -1018,6 +1027,7 @@ class OverpassClient(
                     uses = setOf(UseType.BIKE, UseType.WALK),
                     length = Geo.lengthMeters(pts),
                     mtbScale = parseMtbScale(way?.tags?.get("mtb:scale")) ?: relScale,
+                    imba = parseImba(way?.tags?.get("mtb:scale:imba")) ?: relImba,
                 )
             }
             if (relMembers.isEmpty()) continue
@@ -1030,6 +1040,7 @@ class OverpassClient(
                     // The relation's own rating when it has one, else its hardest section —
                     // as a trail sign rates a trail by its hardest part.
                     mtbScale = relScale ?: relMembers.mapNotNull { it.mtbScale }.maxOrNull(),
+                    level = DifficultyTier.of(relScale, relImba) ?: relMembers.mapNotNull { it.level }.maxOrNull(),
                     parks = parks,
                     ownTags = rel.tags,
                 )
@@ -1049,6 +1060,7 @@ class OverpassClient(
                 uses = mtbSegmentUses(el.tags),
                 length = Geo.lengthMeters(points),
                 mtbScale = parseMtbScale(el.tags["mtb:scale"]),
+                imba = parseImba(el.tags["mtb:scale:imba"]),
             )
         }
 
@@ -1080,6 +1092,10 @@ class OverpassClient(
         return uses
     }
 
+    /** mtb:scale:imba 0..4 (the sign colour), or null. */
+    private fun parseImba(raw: String?): Int? =
+        raw?.trim()?.takeWhile { it.isDigit() }?.toIntOrNull()?.takeIf { it in 0..4 }
+
     /** Parse the leading integer of an mtb:scale value (e.g. "2", "1+", "S2"), clamped 0..6; null if none. */
     private fun parseMtbScale(raw: String?): Int? {
         if (raw == null) return null
@@ -1095,6 +1111,8 @@ class OverpassClient(
         members: List<WaySegment>,
         center: GeoPoint,
         mtbScale: Int? = members.mapNotNull { it.mtbScale }.maxOrNull(),
+        /** Defaults to the hardest piece's; a relation passes its own rating when it has one. */
+        level: DifficultyTier? = members.mapNotNull { it.level }.maxOrNull(),
         parks: List<Park> = emptyList(),
         /** The relation's own tags, which speak for the whole trail; empty for a way group. */
         ownTags: Map<String, String> = emptyMap(),
@@ -1143,7 +1161,8 @@ class OverpassClient(
             mtbScale = mtbScale,
             parkName = parkName,
             horseTrailPaths = horseTrailPieces,
-            mtbScalePaths = if (members.any { it.mtbScale != null }) members.map { it.mtbScale } else emptyList(),
+            level = level,
+            levelPaths = if (members.any { it.level != null }) members.map { it.level } else emptyList(),
             onewayPaths = members.map { onewayOf(it.tags) }.takeIf { o -> o.any { it != 0 } }.orEmpty(),
             operator = ownTags["operator"]?.trim()?.takeIf { it.isNotEmpty() } ?: mostOf(members) { it.tags["operator"]?.trim()?.takeIf { v -> v.isNotEmpty() } },
             website = Amenities.websiteOf(ownTags) ?: mostOf(members) { Amenities.websiteOf(it.tags) },

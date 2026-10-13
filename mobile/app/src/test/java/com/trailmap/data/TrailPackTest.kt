@@ -232,8 +232,34 @@ class TrailPackTest {
 
         val loop = byName.getValue("Wudchuk Run")
         assertEquals(2, loop.mtbScale)
-        assertEquals(listOf(1, 2), loop.mtbScalePaths)
+        assertEquals(listOf(DifficultyTier.GREEN, DifficultyTier.BLUE), loop.levelPaths)
+        assertEquals(DifficultyTier.BLUE, loop.level)
         assertEquals(3, byName.getValue("Rated Loop").mtbScale)
+    }
+
+    /**
+     * The posted sign colour (mtb:scale:imba) wins over the S-scale, and a trail carrying only
+     * the sign colour still gets a level — in MTB mode and in ALL mode. KC has 33 such ways.
+     */
+    @Test fun signColourWinsAndCountsAlone() = runBlocking {
+        val files = tmp.newFolder("files")
+        fun w(id: Long, name: String, tags: String, lat: Double) =
+            """{"type":"way","id":$id,"tags":{"name":"$name","highway":"path","surface":"dirt"$tags},""" +
+                """"geometry":[{"lat":$lat,"lon":-94.40},{"lat":${lat + 0.005},"lon":-94.395}]}"""
+        val ways = listOf(
+            w(60, "Fraggle Rock", ""","mtb:scale":"2","mtb:scale:imba":"3"""", 38.980),
+            w(61, "Billy Goat Trail", ""","mtb:scale:imba":"2"""", 38.990),
+        )
+        pack(stateFile(files, "missouri"), listOf("missouri"), missouri,
+            tiles = mapOf("mtb/-378_155.json" to ways, "all/-378_155.json" to ways))
+        val client = OverpassClient(cacheDir = tmp.newFolder("cache"), endpoints = emptyList(), pack = TrailPacks(files))
+        for (mtb in listOf(true, false)) {
+            val byName = client.fetchTrails(GeoPoint(38.985, -94.40), 16_000, mtb = mtb, withParks = false)
+                .trails.associateBy { it.name }
+            assertEquals("mtb=$mtb", DifficultyTier.BLACK, byName.getValue("Fraggle Rock").level)
+            assertEquals("mtb=$mtb", 2, byName.getValue("Fraggle Rock").mtbScale)
+            assertEquals("mtb=$mtb", DifficultyTier.BLUE, byName.getValue("Billy Goat Trail").level)
+        }
     }
 
     /** Downhill-only lines: oneway per piece, bike-specific tags first, -1 means reversed. */

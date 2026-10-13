@@ -363,7 +363,7 @@ private fun TrailOnTrackRow(number: Int, t: TrailOnTrack, onClick: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                MtbBadge(t.trail.mtbScale, Modifier.padding(start = 6.dp))
+                LevelBadge(t.trail.level, t.trail.mtbScale, Modifier.padding(start = 6.dp))
             }
         }
     }

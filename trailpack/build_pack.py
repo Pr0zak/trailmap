@@ -14,7 +14,7 @@ it with the code it already has:
     meta.json              schema, tile size, build time, OSM data timestamp, covered tiles,
                            and the state's outline (to work out coverage across several states)
     all/<x>_<y>.json       ALL mode: named paths/cycleways/tracks/bridleways + non-sidewalk footways
-    mtb/<x>_<y>.json       MTB mode: named mtb:scale ways, designated dirt bike paths, route=mtb
+    mtb/<x>_<y>.json       MTB mode: named mtb:scale / mtb:scale:imba ways, designated dirt bike paths, route=mtb
     parks/<x>_<y>.json     named parks/reserves/protected areas, for naming MTB trail systems
     amen/<x>_<y>.json      trail amenities, Overpass `out center` style: every trailhead, plus
                            parking, toilets, drinking water, bike repair stands and shelters
@@ -91,7 +91,7 @@ PARK_BOUNDARY = {"protected_area", "national_park"}
 # Only the tags the app reads. Everything else is dead weight on the phone.
 KEEP_TAGS = {
     "name", "highway", "surface", "tracktype", "footway", "foot", "bicycle", "horse",
-    "mtb:scale", "route", "leisure", "boundary", "access", "oneway", "oneway:bicycle",
+    "mtb:scale", "mtb:scale:imba", "route", "leisure", "boundary", "access", "oneway", "oneway:bicycle",
     # Who maintains a trail, with a link; and what an amenity is, costs and when it is open.
     "operator", "website", "contact:website", "url", "amenity", "fee", "opening_hours", "shelter_type",
 }
@@ -134,7 +134,7 @@ def is_all_way(t) -> bool:
 def is_mtb_way(t) -> bool:
     if "name" not in t:
         return False
-    if "mtb:scale" in t:
+    if "mtb:scale" in t or "mtb:scale:imba" in t:
         return True
     return (
         t.get("highway") == "path"
@@ -360,7 +360,7 @@ def prefilter(pbf: str) -> str:
     subprocess.run(
         [
             "osmium", "tags-filter", "--overwrite", "-o", out, pbf,
-            "w/highway=path,cycleway,track,bridleway,footway", "w/mtb:scale", "r/route=mtb",
+            "w/highway=path,cycleway,track,bridleway,footway", "w/mtb:scale", "w/mtb:scale:imba", "r/route=mtb",
             "nw/highway=trailhead", "nw/amenity=" + ",".join(k for k in AMENITY_NEAR_M if k != "trailhead"),
             "wr/leisure=park,nature_reserve,recreation_ground", "wr/boundary=protected_area,national_park",
         ],
