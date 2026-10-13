@@ -100,6 +100,21 @@ class ScreenSnapshots {
     }
 
     @Test fun rides() = shot { RidesContent(Samples.rides, onOpenRide = {}, onCreateRide = { "" }) }
+    @Test fun rides_suggested() = shot {
+        val t = Samples.trails
+        val repeat = com.trailmap.data.SuggestedRide(
+            "repeat_1", com.trailmap.data.SuggestedRide.Kind.REPEAT, "Rocky Ridge + Gnome Trail",
+            listOf(t[5], t[6]), rideIds = listOf("a", "b", "c", "d"), lastRidden = 1_758_000_000_000L,
+        )
+        val route = com.trailmap.data.SuggestedRide(
+            "route_1", com.trailmap.data.SuggestedRide.Kind.ROUTE, "Blue River Parkway Trail", listOf(t[4]),
+        )
+        RidesContent(
+            Samples.rides, onOpenRide = {}, onCreateRide = { "" },
+            ui = Samples.uiYou, initialTab = com.trailmap.ui.RidesTab.SUGGESTED,
+            suggestions = com.trailmap.ui.TrailsViewModel.SuggestionsUi(repeats = listOf(repeat), routes = listOf(route)),
+        )
+    }
     @Test fun rides_empty() = shot { RidesContent(emptyList(), onOpenRide = {}, onCreateRide = { "" }) }
 
     @Test fun ride_detail() = shot {

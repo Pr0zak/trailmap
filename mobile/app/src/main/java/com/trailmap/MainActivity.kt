@@ -213,6 +213,7 @@ private fun TrailmapRoot(vm: TrailsViewModel) {
                     onBrowseTrails = { goToTab(Tab.List) },
                     onOpenRecorded = { id -> nav.navigate("recorded/${Uri.encode(id)}") },
                     onOpenMyVitals = { nav.navigate("myvitals") },
+                    onShowOnMap = { goToTab(Tab.Map) },
                 )
             }
             composable("recorded/{id}") { entry ->

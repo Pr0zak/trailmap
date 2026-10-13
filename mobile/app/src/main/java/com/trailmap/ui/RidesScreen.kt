@@ -60,8 +60,10 @@ fun RidesScreen(
     onBrowseTrails: () -> Unit = {},
     onOpenRecorded: (String) -> Unit = {},
     onOpenMyVitals: () -> Unit = {},
+    onShowOnMap: () -> Unit = {},
 ) {
     val ui by vm.state.collectAsStateWithLifecycle()
+    val suggestions by vm.suggestions.collectAsStateWithLifecycle()
     RidesContent(
         rides = ui.rides,
         onOpenRide = onOpenRide,
@@ -71,11 +73,18 @@ fun RidesScreen(
         onOpenRecorded = onOpenRecorded,
         onOpenMyVitals = onOpenMyVitals,
         onSync = vm::syncMyVitals,
+        suggestions = suggestions,
+        onRefreshSuggestions = vm::refreshSuggestions,
+        onSaveSuggestion = { s -> onOpenRide(vm.saveSuggestion(s)) },
+        onPreviewSuggestion = { s ->
+            vm.previewSuggestion(s)
+            onShowOnMap()
+        },
     )
 }
 
-/** The Rides tab's two lists: rides you've planned here, and rides you've recorded. */
-internal enum class RidesTab(val label: String) { PLANNED("Planned"), RECORDED("Recorded") }
+/** The Rides tab's lists: rides you've planned, suggestions, and rides you've recorded. */
+internal enum class RidesTab(val label: String) { PLANNED("Planned"), SUGGESTED("Suggested"), RECORDED("Recorded") }
 
 /** Stateless body of [RidesScreen], so it can be rendered with sample state. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -90,6 +99,10 @@ internal fun RidesContent(
     onOpenMyVitals: () -> Unit = {},
     onSync: () -> Unit = {},
     initialTab: RidesTab = RidesTab.PLANNED,
+    suggestions: TrailsViewModel.SuggestionsUi = TrailsViewModel.SuggestionsUi(),
+    onRefreshSuggestions: () -> Unit = {},
+    onSaveSuggestion: (com.trailmap.data.SuggestedRide) -> Unit = {},
+    onPreviewSuggestion: (com.trailmap.data.SuggestedRide) -> Unit = {},
 ) {
     var showNewDialog by remember { mutableStateOf(false) }
     var tab by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(initialTab) }
@@ -130,7 +143,11 @@ internal fun RidesContent(
             }
         },
     ) { padding ->
-        if (tab == RidesTab.RECORDED) {
+        if (tab == RidesTab.SUGGESTED) {
+            // Recomputed whenever the tab shows or the loaded trails / your rides change.
+            androidx.compose.runtime.LaunchedEffect(ui.trailsVersion, ui.visitsVersion, ui.contextVersion) { onRefreshSuggestions() }
+            SuggestedList(ui, suggestions, onSaveSuggestion, onPreviewSuggestion, onOpenMyVitals, Modifier.padding(padding))
+        } else if (tab == RidesTab.RECORDED) {
             RecordedList(ui, onOpenRecorded, onOpenMyVitals, onSync, Modifier.padding(padding))
         } else if (rides.isEmpty()) {
             Column(

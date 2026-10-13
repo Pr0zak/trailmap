@@ -242,13 +242,15 @@ fun MapScreen(
 
     // Highlight the selected trail (or clear the highlight when nothing is selected).
     // A highlighted ride lights up all of its trails that are loaded.
-    LaunchedEffect(ui.selectedTrailId, ui.highlightedRideId, ui.rides, ui.trailsVersion, styleRef.value) {
+    LaunchedEffect(ui.selectedTrailId, ui.highlightedRideId, ui.rides, ui.previewRide, ui.trailsVersion, styleRef.value) {
         val style = styleRef.value ?: return@LaunchedEffect
         val rideIds = ui.highlightedRideId
             ?.let { rid -> ui.rides.firstOrNull { it.id == rid } }
             ?.trails?.map { it.id }?.toSet().orEmpty()
-        val lit = ui.trails.filter { it.id == ui.selectedTrailId || it.id in rideIds } +
-            ui.contextTrails.filter { it.id == ui.selectedTrailId }
+        val lit = (ui.trails.filter { it.id == ui.selectedTrailId || it.id in rideIds } +
+            ui.contextTrails.filter { it.id == ui.selectedTrailId } +
+            ui.previewTrails.takeIf { ui.highlightedRideId != null && ui.highlightedRideId == ui.previewRide?.id }.orEmpty())
+            .distinctBy { it.id }
         val fc = if (lit.isNotEmpty()) trailsFc(lit) else EMPTY_FC
         style.getSourceAs<GeoJsonSource>(SRC_HIGHLIGHT)?.setGeoJson(fc)
     }
@@ -508,8 +510,8 @@ internal fun BoxScope.MapOverlays(
 
             // "Show ride on map" banner: which ride is highlighted, and how many of its
             // trails are loaded yet (the rest arrive as the map loads that area).
-            ui.highlightedRideId?.let { rid -> ui.rides.firstOrNull { it.id == rid } }?.let { ride ->
-                val shown = ride.trails.count { t -> ui.trails.any { it.id == t.id } }
+            ui.highlightedRideId?.let { rid -> (ui.rides + listOfNotNull(ui.previewRide)).firstOrNull { it.id == rid } }?.let { ride ->
+                val shown = ride.trails.count { t -> ui.trails.any { it.id == t.id } || ui.previewTrails.any { it.id == t.id } }
                 Surface(
                     shape = RoundedCornerShape(50),
                     color = MaterialTheme.colorScheme.secondaryContainer,

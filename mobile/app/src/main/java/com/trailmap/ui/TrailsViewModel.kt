@@ -30,6 +30,8 @@ import com.trailmap.data.MyVitalsStore
 import com.trailmap.data.PersonalPace
 import com.trailmap.data.Polyline
 import com.trailmap.data.RecordedTrack
+import com.trailmap.data.SuggestedRide
+import com.trailmap.data.Suggestions
 import com.trailmap.data.TrackIndex
 import com.trailmap.data.TrailOnTrack
 import com.trailmap.data.TrailStatus
@@ -252,6 +254,10 @@ data class TrailsUiState(
     val contextVersion: Int = 0,
     /** MTB mode: draw gravel trails among [contextTrails] in gravel gold, not grey (persisted). */
     val mtbGravel: Boolean = true,
+    /** A suggested ride shown on the map without being saved (Rides → Suggested → Show on map). */
+    val previewRide: Ride? = null,
+    /** [previewRide]'s trails, which may not be in the loaded set, for the map's highlight. */
+    val previewTrails: List<Trail> = emptyList(),
 ) {
     /** [recorded] by id. */
     val recordedById: Map<String, RecordedTrack> by lazy { recorded.associateBy { it.id } }
@@ -464,6 +470,20 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
      * areas, but the ride's screen opens them, so [trailById] looks here too.
      */
     private val auxTrails = HashMap<String, Trail>()
+
+    /** Rides → Suggested: rides you repeat and named routes around the map. */
+    data class SuggestionsUi(
+        val repeats: List<SuggestedRide> = emptyList(),
+        val routes: List<SuggestedRide> = emptyList(),
+        val working: Boolean = false,
+    )
+
+    private val _suggestions = MutableStateFlow(SuggestionsUi())
+    val suggestions: StateFlow<SuggestionsUi> = _suggestions.asStateFlow()
+    private var suggestionsJob: Job? = null
+
+    /** MTB circles fetched (from packs only) so Suggested can list named routes in ALL mode. */
+    private val routeAreas = LinkedHashMap<String, List<Trail>>(4, 0.75f, true)
 
     private val _recordedTrails = MutableStateFlow<Map<String, RecordedTrails>>(emptyMap())
     val recordedTrails: StateFlow<Map<String, RecordedTrails>> = _recordedTrails.asStateFlow()
@@ -1366,7 +1386,78 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         return CameraTarget(GeoPoint((n + s) / 2, (e + w) / 2), zoom)
     }
 
-    fun clearRideHighlight() = _state.update { it.copy(highlightedRideId = null) }
+    fun clearRideHighlight() = _state.update { it.copy(highlightedRideId = null, previewRide = null, previewTrails = emptyList()) }
+
+    /**
+     * Work out the suggestions around the map from what is loaded: your rides grouped by the
+     * trails they used, and the named route relations held in either mode. Named routes need
+     * MTB data, so in ALL mode the MTB circle is read too — from a pack or the cache only.
+     */
+    fun refreshSuggestions() {
+        suggestionsJob?.cancel()
+        _suggestions.update { it.copy(working = true) }
+        suggestionsJob = viewModelScope.launch {
+            val s = _state.value
+            val center = s.center
+            if (unionFor(true).none { it.id.startsWith("rel_") } &&
+                overpass.isWarm(center, ROUTES_RADIUS_M, mtb = true)
+            ) {
+                runCatching {
+                    withTimeoutOrNull(CONTEXT_BUDGET_MS) { overpass.fetchTrails(center, ROUTES_RADIUS_M, mtb = true, withParks = false) }
+                }.getOrElse { if (it is CancellationException) throw it else null }?.let { got ->
+                    routeAreas["${got.servedCenter.lat},${got.servedCenter.lon},${got.servedRadius}"] = got.trails
+                    while (routeAreas.size > 2) routeAreas.remove(routeAreas.keys.first())
+                }
+            }
+            // Snapshot on the main thread: loadedAreas is only touched here and in mergeArea.
+            val pool = (s.trails + s.contextTrails + unionFor(true) + unionFor(false) + routeAreas.values.flatten())
+                .groupBy { it.id }.mapValues { (_, copies) -> copies.maxBy { it.lengthMeters } }
+            val ridesByTrail = s.visits.mapValues { it.value.rides }
+            val recorded = s.recordedById
+            val index = trackIndex
+            val result = withContext(Dispatchers.Default) {
+                val repeats = Suggestions.repeatClusters(ridesByTrail) { recorded[it]?.start ?: 0L }
+                    .take(MAX_REPEAT_SUGGESTIONS)
+                    .mapNotNull { (ids, rides) ->
+                        val trails = ids.mapNotNull { pool[it] }
+                        if (trails.size < 2) return@mapNotNull null
+                        // Riding order from the latest ride of the habit.
+                        val ordered = index?.trailsAlong(rides.first(), trails)?.map { it.trail }
+                            ?.let { inOrder -> inOrder + (trails - inOrder.toSet()) } ?: trails
+                        SuggestedRide(
+                            id = "repeat_" + ids.sorted().joinToString("|").hashCode().toUInt().toString(16),
+                            kind = SuggestedRide.Kind.REPEAT,
+                            name = Suggestions.nameFor(ordered),
+                            trails = ordered,
+                            rideIds = rides,
+                            lastRidden = recorded[rides.first()]?.start,
+                        )
+                    }
+                SuggestionsUi(repeats, Suggestions.routes(pool.values.toList(), center), working = false)
+            }
+            synchronized(auxTrails) { pool.values.forEach { auxTrails.putIfAbsent(it.id, it) } }
+            _suggestions.value = result
+        }
+    }
+
+    /** Save a suggestion as a planned ride; returns its id. */
+    fun saveSuggestion(s: SuggestedRide): String {
+        val id = "ride_" + System.currentTimeMillis()
+        persistRides(_state.value.rides + Ride(id, s.name, s.trails.map { it.toRideTrail() }))
+        return id
+    }
+
+    /** Highlight a suggestion's trails on the map and frame them, without saving anything. */
+    fun previewSuggestion(s: SuggestedRide) {
+        val ride = Ride("preview_${s.id}", s.name, s.trails.map { it.toRideTrail() })
+        val target = frame(s.trails.flatMap { t -> t.paths.flatMap { listOf(it.first(), it.last()) } })
+        _state.update {
+            it.copy(
+                previewRide = ride, previewTrails = s.trails, highlightedRideId = ride.id,
+                highlightedTrackId = null, selectedTrailId = null, focusTarget = target ?: it.focusTarget,
+            )
+        }
+    }
 
     /** Minimum-length filter in miles (0 = any). */
     fun setMinLength(miles: Double) = _state.update { it.copy(minLengthMiles = miles) }
@@ -2074,6 +2165,10 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
 
         /** How long the follow-up park query may take before systems keep their fallback names. */
         private const val PARKS_BUDGET_MS = 60_000L
+
+        /** Named routes are looked for this far around the map (MTB mode's default radius). */
+        private const val ROUTES_RADIUS_M = 40_234
+        private const val MAX_REPEAT_SUGGESTIONS = 15
 
         /** Context trails come from the phone only; this is a guard, not an expected wait. */
         private const val CONTEXT_BUDGET_MS = 10_000L
