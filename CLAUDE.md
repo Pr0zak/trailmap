@@ -91,7 +91,7 @@ ui/
   YouParts.kt         visit line, condition chip, "you" blue, date helpers
   theme/  "Trailhead" palette. Surface colors: green=paved, GOLD(#DAA520)=gravel, SIENNA(#A0522D)=dirt (gold vs sienna chosen to be clearly distinct; gravel/brown were too similar)
 MainActivity.kt       bottom-nav (Map / Trails) + detail route. NOTE: trail ids use `_` separators (name_<slug>, way_<id>, rel_<id>) — NOT `/`, which breaks the `detail/{id}` nav route.
-res/drawable/ic_launcher_{foreground,monochrome}.xml + mipmap-anydpi-v26/ic_launcher.xml   app icon: dark switchback pin on gold (#F2C744, values/colors.xml), plus a line-drawn themed-icon layer. IconSnapshot renders the real layers.
+res/drawable/ic_launcher_{foreground,monochrome}.xml + mipmap-anydpi-v26/ic_launcher.xml   app icon (0.26.0, concept "B · Trail sign" of six in design/icon-concepts/): green circle, blue square, black diamond over a dirt trail on cream (#F4EFE3, values/colors.xml) — the difficulty-badge colours; the themed layer is the same shapes in one colour. IconSnapshot renders the real layers.
 (no style assets: both basemaps are remote OpenFreeMap styles — light https://tiles.openfreemap.org/styles/liberty, dark …/styles/dark)
 design/mockups/       Stitch "Trailhead" mockups (map/filters/list/detail .png + .html)
 ```

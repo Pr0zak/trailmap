@@ -1,6 +1,6 @@
 <!--
-  Themed-icon layer (Android 13+): one colour, tinted by the system. A vector can't punch the
-  switchback out of a filled pin, so this is the line-drawn version of the same mark.
+  Themed-icon layer (Android 13+): one colour, tinted by the system. The same three sign shapes
+  and trail as the foreground; their shapes, not their colours, carry the meaning.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
@@ -8,19 +8,18 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <path
-        android:strokeColor="#000000"
-        android:strokeWidth="5"
-        android:strokeLineJoin="round"
-        android:fillColor="#00000000"
-        android:pathData="M54,22 C39.6,22 29,32.6 29,46 C29,62 54,86 54,86 C54,86 79,62 79,46 C79,32.6 68.4,22 54,22 Z" />
-    <path
-        android:strokeColor="#000000"
-        android:strokeWidth="4.6"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:fillColor="#00000000"
-        android:pathData="M45,61 L62,55 L45,48 L62,41" />
+        android:fillColor="#000000"
+        android:pathData="M33,50m-9,0a9,9 0 1,0 18,0a9,9 0 1,0 -18,0" />
     <path
         android:fillColor="#000000"
-        android:pathData="M45,61 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0" />
+        android:pathData="M46,42h16v16h-16z" />
+    <path
+        android:fillColor="#000000"
+        android:pathData="M75,39 L86,50 L75,61 L64,50 Z" />
+    <path
+        android:strokeColor="#000000"
+        android:strokeWidth="3.4"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M26,73 C38,66 46,80 58,72 S76,66 84,72" />
 </vector>

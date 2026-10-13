@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,14 +32,14 @@ class IconSnapshot {
     @Composable
     private fun Icon(shape: Shape, sizeDp: Int, themed: Boolean = false) {
         // An adaptive icon is a 108dp canvas; launchers show the middle 72dp.
-        val bg = if (themed) Color(0xFFDCEBDD) else Color(0xFFF2C744)
-        Box(Modifier.size(sizeDp.dp).clip(shape).background(bg)) {
+        val bg = if (themed) Color(0xFFDCEBDD) else Color(0xFFF4EFE3)
+        Box(Modifier.size(sizeDp.dp).clip(shape).background(bg), contentAlignment = androidx.compose.ui.Alignment.Center) {
             Image(
                 painterResource(if (themed) R.drawable.ic_launcher_monochrome else R.drawable.ic_launcher_foreground),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 colorFilter = if (themed) ColorFilter.tint(Color(0xFF16361F)) else null,
-                modifier = Modifier.size((sizeDp * 1.5f).dp).padding(0.dp),
+                modifier = Modifier.requiredSize((sizeDp * 1.5f).dp),
             )
         }
     }
