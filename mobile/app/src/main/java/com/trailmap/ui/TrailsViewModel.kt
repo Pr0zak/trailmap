@@ -69,7 +69,7 @@ enum class RiddenFilter(val label: String) { ANY("Any"), RIDDEN("Ridden"), NOT_Y
 
 /** Map layers drawn from your myvitals activity, toggled in the Layers menu. */
 enum class YouLayer(val label: String, val default: Boolean) {
-    RIDDEN("Ridden trails", true),
+    RIDDEN("Ridden trails", false),
     TRACKS("My tracks", false),
     CONDITIONS("Trail conditions", true),
 }
@@ -515,6 +515,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun hasLocationPermission(): Boolean = locator.hasPermission()
 
+    /** Live GPS fixes for the map's location dot, while collected. */
+    fun locationUpdates() = locator.updates()
+
     /**
      * One-time startup: centre on the device (Kansas City fallback) and load, cache-first.
      * Idempotent, and the guard lives here rather than in the composition — MapScreen is a
@@ -527,8 +530,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         bootstrapPending = true
         viewModelScope.launch {
             try {
-                val here = locator.current()
-                _state.update { it.copy(center = here, focusTarget = CameraTarget(here, DEFAULT_ZOOM)) }
+                val fix = locator.fix()
+                val here = fix ?: Locator.KANSAS_CITY
+                _state.update { it.copy(center = here, focusTarget = CameraTarget(here, zoomFor(fix))) }
                 chooseDefaultStates(here)
                 load(here, initialFetchRadius())
                 // Hold camera-driven loads off until this one lands, not merely until it has
@@ -547,6 +551,12 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * Close in on a real fix so the dot and the streets around it are readable; the Kansas
+     * City fallback isn't where the user is, so it keeps the wider overview.
+     */
+    private fun zoomFor(fix: GeoPoint?): Double = if (fix != null) MY_LOCATION_ZOOM else DEFAULT_ZOOM
+
+    /**
      * Radius for a load that isn't driven by a camera idle. It has to match what the camera
      * will ask for a moment later, or the first thing the map does on launch is supersede its
      * own bootstrap fetch — which is exactly what the diagnostics log caught it doing.
@@ -561,13 +571,16 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
      * only path that bypasses the cache — an explicit tap is the one time the user is asking
      * for current data rather than fast data.
      */
-    fun recenterOnMe() {
+    fun recenterOnMe(known: GeoPoint? = null) {
         bootstrapped = true
         viewModelScope.launch {
-            val here = locator.current()
+            // [known] is where the map's location dot is, when it has one: centring on a
+            // second, separately requested fix could land the camera beside the dot.
+            val fix = known ?: locator.fix()
+            val here = fix ?: Locator.KANSAS_CITY
             // Move the camera explicitly — panning no longer follows [center], so an explicit
             // recentre has to ask for the move.
-            _state.update { it.copy(center = here, focusTarget = CameraTarget(here, DEFAULT_ZOOM)) }
+            _state.update { it.copy(center = here, focusTarget = CameraTarget(here, zoomFor(fix))) }
             load(here, initialFetchRadius(), force = true)
         }
     }
@@ -1825,8 +1838,14 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         /** ALL-mode default: 5 mi, wide enough to catch parkway and bike routes. */
         private val DEFAULT_ALL_RADIUS = milesToMeters(5)
 
-        /** Zoom used when the camera is moved to the user's location. */
+        /** Zoom for the map's start and for the Kansas City fallback when there is no fix. */
         const val DEFAULT_ZOOM = 12.5
+
+        /**
+         * Zoom when the camera is moved to a real device fix: about 1 km across on a phone,
+         * close enough to see which street or trail you are on.
+         */
+        const val MY_LOCATION_ZOOM = 15.0
 
         /** Zoom used when a trail-system header recenters the map on a park. */
         private const val SYSTEM_FOCUS_ZOOM = 14.0

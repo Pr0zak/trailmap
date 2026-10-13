@@ -45,7 +45,7 @@ class Prefs(context: Context) {
         sp.edit().putString(KEY_RIDES, json.encodeToString(rides)).apply()
     }
 
-    /** Map layers drawn from your myvitals activity. Ridden trails and conditions default on. */
+    /** Map layers drawn from your myvitals activity. Conditions default on; ridden trails and tracks off. */
     fun layer(name: String, default: Boolean): Boolean = sp.getBoolean("layer_$name", default)
 
     fun setLayer(name: String, on: Boolean) {

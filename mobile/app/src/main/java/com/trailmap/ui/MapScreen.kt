@@ -56,6 +56,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
@@ -64,8 +66,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.trailmap.data.DifficultyTier
+import com.trailmap.data.MtbDifficulty
 import com.trailmap.data.DiagLog
 import com.trailmap.data.Polyline
 import com.trailmap.data.RecordedTrack
@@ -80,6 +85,9 @@ import org.maplibre.android.style.layers.SymbolLayer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.maplibre.android.camera.CameraPosition
+import org.maplibre.android.location.LocationComponentActivationOptions
+import org.maplibre.android.location.modes.CameraMode
+import org.maplibre.android.location.modes.RenderMode
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapLibreMapOptions
@@ -94,6 +102,7 @@ import org.maplibre.android.style.sources.GeoJsonSource
 private const val SRC_TRAILS = "trails"
 private const val LAYER_TRAILS = "trails-line"
 private const val LAYER_TRAILS_CASING = "trails-line-casing"
+private const val LAYER_DOUBLE_BLACK = "trails-double-black"
 private const val SRC_HIGHLIGHT = "trail-highlight"
 private const val LAYER_HIGHLIGHT = "trail-highlight-line"
 // Your activity from myvitals: every recorded track, the ridden stretches of trails, one
@@ -152,9 +161,14 @@ fun MapScreen(
     }
 
     // First-launch: request location, then locateAndLoad either way (KC fallback inside).
+    val locationGranted = remember { mutableStateOf(vm.hasLocationPermission()) }
+    val context = androidx.compose.ui.platform.LocalContext.current
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { vm.bootstrap() }
+    ) { granted ->
+        locationGranted.value = granted || vm.hasLocationPermission()
+        vm.bootstrap()
+    }
     LaunchedEffect(Unit) {
         // Only ask when the permission is actually missing. Re-launching the contract on an
         // already-granted permission fires the callback immediately, which used to mean a
@@ -171,6 +185,23 @@ fun MapScreen(
         map.setStyle(Style.Builder().fromUri(if (dark) STYLE_DARK else STYLE_LIGHT)) { style ->
             applyTrailLayers(style, dark)
             styleRef.value = style
+        }
+    }
+
+    // The blue "you are here" dot with its accuracy ring, fed live GPS fixes while the map is
+    // on screen (started, location granted). CameraMode.NONE: the dot follows you, the camera doesn't —
+    // panning drives trail loading, so tracking would fight the user. Re-activated on every
+    // style load, since a theme flip replaces the style the component draws into.
+    LaunchedEffect(styleRef.value, locationGranted.value) {
+        val style = styleRef.value ?: return@LaunchedEffect
+        val map = mapRef.value ?: return@LaunchedEffect
+        if (!locationGranted.value) return@LaunchedEffect
+        map.showLocationDot(context, style)
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            vm.locationUpdates().collect { fix ->
+                val lc = map.locationComponent
+                if (styleRef.value === style && lc.isLocationComponentActivated) lc.forceLocationUpdate(fix)
+            }
         }
     }
 
@@ -333,7 +364,7 @@ fun MapScreen(
             onClearSelection = { vm.clearSelection() },
             onSetTheme = vm::setMapTheme,
             onOpenOffline = onOpenOffline,
-            onRecenter = vm::recenterOnMe,
+            onRecenter = { vm.recenterOnMe(mapRef.value?.myLocation()) },
             onToggleSaved = vm::toggleSaved,
             onCreateRide = { name, t -> vm.createRide(name, seed = t) },
             onAddToRide = { rideId, t -> vm.addTrailToRide(rideId, t) },
@@ -692,7 +723,7 @@ private fun StatusPill(text: String) {
 }
 
 /**
- * One-line map color key: surface colors in ALL mode, all seven mtb:scale grades in MTB mode.
+ * One-line map color key: surface colors in ALL mode, the four trail-sign difficulty colours in MTB mode.
  * The swatches are the line colors [trailColorExpr] draws — not the badge fills, which are
  * darker so their white labels stay readable.
  */
@@ -750,10 +781,11 @@ private fun LegendColors(mode: MapMode, dark: Boolean) {
             Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            MTB_LINE_COLORS.forEachIndexed { scale, (light, darkColor) ->
+            DifficultyTier.entries.forEach { tier ->
+                val (light, darkColor) = TIER_LINE_COLORS.getValue(tier)
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Swatch(Color((if (dark) darkColor else light).toInt()), 22)
-                    Text("S$scale", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+                    TierSwatch(Color((if (dark) darkColor else light).toInt()), tier, dark)
+                    Text("${tier.symbol} ${tier.label}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
                 }
             }
         }
@@ -774,21 +806,39 @@ private fun LegendColors(mode: MapMode, dark: Boolean) {
     }
 }
 
+/** A legend swatch drawn like the line: white rim on the dark map, dashed centre for expert. */
+@Composable
+private fun TierSwatch(color: Color, tier: DifficultyTier, dark: Boolean) {
+    val rim = if (dark && color.luminance() < 0.05f) Modifier.border(1.dp, Color.White, RoundedCornerShape(50)) else Modifier
+    Box(Modifier.width(30.dp).height(6.dp).clip(RoundedCornerShape(50)).then(rim).background(color)) {
+        if (tier == DifficultyTier.DOUBLE_BLACK) {
+            Row(Modifier.align(Alignment.Center), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                repeat(4) { Box(Modifier.width(4.dp).height(2.dp).background(Color.White)) }
+            }
+        }
+    }
+}
+
 @Composable
 private fun Swatch(color: Color, widthDp: Int) = Box(
     Modifier.width(widthDp.dp).height(4.dp).clip(RoundedCornerShape(50)).background(color),
 )
 
-/** mtb:scale 0..6 line colors as (light basemap, dark basemap). Shared by the lines and legend. */
-private val MTB_LINE_COLORS = listOf(
-    0xFF43A047 to 0xFF66D08A,
-    0xFF1E9E6A to 0xFF3FD89A,
-    0xFF1E88E5 to 0xFF5BB0F5,
-    0xFF424242 to 0xFFBDBDBD,
-    0xFFE53935 to 0xFFFF6B6B,
-    0xFFB71C1C to 0xFFE57373,
-    0xFF7F0000 to 0xFFD84343,
+/**
+ * Trail-sign line colours as (light basemap, dark basemap), shared by the lines and legend:
+ * green = easy, blue = intermediate, black = advanced and expert (expert also gets a white
+ * dashed centre, [LAYER_DOUBLE_BLACK]). Black stays black on the dark map; the solid white
+ * casing [difficultyCasingExpr] gives it there is what keeps it visible.
+ */
+private val TIER_LINE_COLORS = mapOf(
+    DifficultyTier.GREEN to (0xFF2E9E44 to 0xFF4CC86A),
+    DifficultyTier.BLUE to (0xFF1E6FD9 to 0xFF4C9BFF),
+    DifficultyTier.BLACK to (0xFF111111 to 0xFF000000),
+    DifficultyTier.DOUBLE_BLACK to (0xFF111111 to 0xFF000000),
 )
+
+/** mtb:scale 0..6 → its tier's line colour, indexed by scale. */
+private val MTB_LINE_COLORS = MtbDifficulty.entries.map { TIER_LINE_COLORS.getValue(it.tier) }
 
 /** Surface line colors as (light, dark). Shared by the lines and legend. */
 private val SURFACE_LINE_COLORS = listOf(
@@ -980,13 +1030,12 @@ private fun applyTrailLayers(style: Style, dark: Boolean) {
     )
     // Casing = a wider line drawn underneath the colored line. A dark outline on the light
     // basemap and a light halo on the dark basemap make the colored lines pop on either.
-    val casing = if (dark) 0x66FFFFFF.toInt() else 0x55000000.toInt()
     style.addLayer(
         LineLayer(LAYER_TRAILS_CASING, SRC_TRAILS).withProperties(
             PropertyFactory.lineWidth(lineWidthExpr(2f)),
             PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
             PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
-            PropertyFactory.lineColor(casing),
+            PropertyFactory.lineColor(difficultyCasingExpr(dark)),
         ),
     )
     style.addLayer(
@@ -995,6 +1044,21 @@ private fun applyTrailLayers(style: Style, dark: Boolean) {
             PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
             PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
             PropertyFactory.lineColor(trailColorExpr(dark)),
+        ),
+    )
+    // Double black (mtb:scale 4-6): a white dashed centre down the black line, so expert
+    // trails read apart from advanced ones the way a ◆◆ sign does.
+    style.addLayer(
+        LineLayer(LAYER_DOUBLE_BLACK, SRC_TRAILS).withProperties(
+            PropertyFactory.lineWidth(lineWidthExpr(-1f)),
+            PropertyFactory.lineColor(0xFFFFFFFF.toInt()),
+            PropertyFactory.lineDasharray(arrayOf(1.5f, 1.5f)),
+        ).withFilter(
+            Expression.any(
+                *MtbDifficulty.entries.filter { it.tier == DifficultyTier.DOUBLE_BLACK }
+                    .map { Expression.eq(Expression.get("mtb"), Expression.literal("${it.scale}")) }
+                    .toTypedArray(),
+            ),
         ),
     )
     // One recorded activity, on top of the trails it used.
@@ -1055,6 +1119,35 @@ private fun Color.toArgbInt(): Int = android.graphics.Color.argb(
     (alpha * 255).toInt(), (red * 255).toInt(), (green * 255).toInt(), (blue * 255).toInt(),
 )
 
+/** Turns on the location dot (the caller has checked the permission). */
+@SuppressLint("MissingPermission")
+private fun MapLibreMap.showLocationDot(context: android.content.Context, style: Style) {
+    try {
+        locationComponent.apply {
+            activateLocationComponent(
+                LocationComponentActivationOptions.builder(context, style)
+                    // No engine of its own: MapLibre's asks the platform "fused" provider at
+                    // BALANCED accuracy whatever priority it is given — a Wi-Fi/cell fix that
+                    // can sit 100 m off, and never GPS. The map feeds it GPS fixes instead.
+                    .useDefaultLocationEngine(false)
+                    .build(),
+            )
+            isLocationComponentEnabled = true
+            cameraMode = CameraMode.NONE
+            renderMode = RenderMode.COMPASS
+        }
+    } catch (e: SecurityException) {
+        // Permission revoked between the check and here; the map works without the dot.
+    }
+}
+
+/** Where the map's location dot is, or null when it isn't showing or has no fix yet. */
+private fun MapLibreMap.myLocation(): com.trailmap.data.GeoPoint? {
+    val lc = locationComponent
+    if (!lc.isLocationComponentActivated || !lc.isLocationComponentEnabled) return null
+    return lc.lastKnownLocation?.let { com.trailmap.data.GeoPoint(it.latitude, it.longitude) }
+}
+
 // Zoom-interpolated stroke width: thin when zoomed out (so dense trail networks don't
 // merge into blobs), wider when zoomed in. [extra] widens it (casing peeks out; highlight glows).
 private fun lineWidthExpr(extra: Float = 0f): Expression =
@@ -1080,6 +1173,21 @@ internal fun trailColorExpr(dark: Boolean): Expression {
         Expression.get("mtb"),
         *stops.toTypedArray(),
         surfaceColorExpr(dark), // default: unrated trails → surface color
+    )
+}
+
+/**
+ * Casing under the trail lines: a dark outline on the light basemap, a light halo on the dark
+ * one — made solid white under black-rated lines there, which would otherwise vanish.
+ */
+private fun difficultyCasingExpr(dark: Boolean): Expression {
+    val normal = Expression.color(if (dark) 0x66FFFFFF.toInt() else 0x55000000.toInt())
+    if (!dark) return normal
+    val black = MtbDifficulty.entries.filter { it.tier == DifficultyTier.BLACK || it.tier == DifficultyTier.DOUBLE_BLACK }
+    return Expression.match(
+        Expression.get("mtb"),
+        *black.flatMap { listOf(Expression.literal("${it.scale}"), Expression.color(0xE6FFFFFF.toInt())) }.toTypedArray(),
+        normal,
     )
 }
 

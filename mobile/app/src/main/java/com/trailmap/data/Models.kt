@@ -76,20 +76,39 @@ enum class HorseTrailFilter(val label: String) { SHOW("Show"), HIDE("Hide"), ONL
 /** Intended use, derived from OSM bicycle/foot designation + highway type. */
 enum class UseType(val label: String) { WALK("Walking"), BIKE("Biking"), HORSE("Horseback") }
 
-/** OSM mtb:scale (0..6) mapped to IMBA-ish difficulty labels + colors for MTB mode. */
-enum class MtbDifficulty(val scale: Int, val label: String, val color: Color) {
-    // Badge fills, each dark enough for white label text (>= 4.5:1). The map's line colors
-    // are separate and brighter — see trailColorExpr in MapScreen.
-    S0(0, "Beginner", Color(0xFF2E7D32)),
-    S1(1, "Easy", Color(0xFF00796B)),
-    S2(2, "Intermediate", Color(0xFF1976D2)),
-    S3(3, "Advanced", Color(0xFF424242)),
-    S4(4, "Expert", Color(0xFFD32F2F)),
-    S5(5, "Expert+", Color(0xFFB71C1C)),
-    S6(6, "Extreme", Color(0xFF7F0000));
+/**
+ * The trail-sign colour a rating maps to, as on ski runs and IMBA trail signs: green circle
+ * (easy), blue square (intermediate), black diamond (advanced), double black (expert).
+ */
+enum class DifficultyTier(val label: String, val symbol: String) {
+    GREEN("Easy", "●"),
+    BLUE("Intermediate", "■"),
+    BLACK("Advanced", "◆"),
+    DOUBLE_BLACK("Expert", "◆◆"),
+}
 
-    /** Short chip text, e.g. "S2 · Intermediate". */
-    val badge: String get() = "S$scale · $label"
+/**
+ * OSM mtb:scale (0..6) mapped to difficulty labels and trail-sign colours: S0-S1 green,
+ * S2 blue, S3 black, S4-S6 double black. Badge fills carry white label text (>= 4.5:1); the
+ * map's line colours are separate — see MTB_LINE_COLORS in MapScreen.
+ */
+enum class MtbDifficulty(val scale: Int, val label: String, val tier: DifficultyTier) {
+    S0(0, "Beginner", DifficultyTier.GREEN),
+    S1(1, "Easy", DifficultyTier.GREEN),
+    S2(2, "Intermediate", DifficultyTier.BLUE),
+    S3(3, "Advanced", DifficultyTier.BLACK),
+    S4(4, "Expert", DifficultyTier.DOUBLE_BLACK),
+    S5(5, "Expert+", DifficultyTier.DOUBLE_BLACK),
+    S6(6, "Extreme", DifficultyTier.DOUBLE_BLACK);
+
+    val color: Color get() = when (tier) {
+        DifficultyTier.GREEN -> Color(0xFF2E7D32)
+        DifficultyTier.BLUE -> Color(0xFF1565C0)
+        DifficultyTier.BLACK, DifficultyTier.DOUBLE_BLACK -> Color(0xFF1A1A1A)
+    }
+
+    /** Chip text with the sign shape, e.g. "■ S2 · Intermediate", "◆◆ S4 · Expert". */
+    val badge: String get() = "${tier.symbol} S$scale · $label"
 
     companion object {
         fun of(scale: Int?): MtbDifficulty? = scale?.let { s -> entries.firstOrNull { it.scale == s } }

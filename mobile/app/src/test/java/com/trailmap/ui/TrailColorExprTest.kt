@@ -4,17 +4,17 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.maplibre.android.style.expressions.Expression
 
-/** The line-color expression built from the shared color tables matches the original literal one. */
+/** The line-color expression maps mtb:scale onto trail-sign colours: green, blue, black. */
 class TrailColorExprTest {
     private fun original(dark: Boolean, surface: Expression): Expression = Expression.match(
         Expression.get("mtb"),
-        Expression.literal("0"), Expression.color((if (dark) 0xFF66D08A else 0xFF43A047).toInt()),
-        Expression.literal("1"), Expression.color((if (dark) 0xFF3FD89A else 0xFF1E9E6A).toInt()),
-        Expression.literal("2"), Expression.color((if (dark) 0xFF5BB0F5 else 0xFF1E88E5).toInt()),
-        Expression.literal("3"), Expression.color((if (dark) 0xFFBDBDBD else 0xFF424242).toInt()),
-        Expression.literal("4"), Expression.color((if (dark) 0xFFFF6B6B else 0xFFE53935).toInt()),
-        Expression.literal("5"), Expression.color((if (dark) 0xFFE57373 else 0xFFB71C1C).toInt()),
-        Expression.literal("6"), Expression.color((if (dark) 0xFFD84343 else 0xFF7F0000).toInt()),
+        Expression.literal("0"), Expression.color((if (dark) 0xFF4CC86A else 0xFF2E9E44).toInt()), // green
+        Expression.literal("1"), Expression.color((if (dark) 0xFF4CC86A else 0xFF2E9E44).toInt()), // green
+        Expression.literal("2"), Expression.color((if (dark) 0xFF4C9BFF else 0xFF1E6FD9).toInt()), // blue
+        Expression.literal("3"), Expression.color((if (dark) 0xFF000000 else 0xFF111111).toInt()), // black
+        Expression.literal("4"), Expression.color((if (dark) 0xFF000000 else 0xFF111111).toInt()), // double black
+        Expression.literal("5"), Expression.color((if (dark) 0xFF000000 else 0xFF111111).toInt()),
+        Expression.literal("6"), Expression.color((if (dark) 0xFF000000 else 0xFF111111).toInt()),
         surface,
     )
 
