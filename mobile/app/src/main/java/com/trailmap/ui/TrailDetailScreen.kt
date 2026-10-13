@@ -80,6 +80,8 @@ import kotlinx.coroutines.Dispatchers
 import androidx.compose.runtime.produceState
 import kotlin.math.cos
 import kotlin.math.min
+import com.trailmap.data.Amenities
+import com.trailmap.data.Amenity
 import com.trailmap.data.ElevationProfile
 import com.trailmap.data.Trail
 import com.trailmap.data.TrailConditions
@@ -303,6 +305,13 @@ internal fun TrailDetailContent(
                     }
                 }
 
+                // What's at the trail: parking, toilets, water… within a short walk of it.
+                val nearby = remember(trail, ui.amenitiesVersion) { Amenities.near(trail, ui.amenities) }
+                if (nearby.isNotEmpty()) AtThisTrail(nearby)
+
+                // Who looks after it, with their page when the map has one.
+                if (trail.operator != null || trail.website != null) MaintainedBy(trail)
+
                 if (ui.recorded.isNotEmpty()) YourRidesHere(trail, visits, ui, onOpenRecorded, ridesExpanded)
 
                 if (trail.surfaceMix.size > 1) {
@@ -359,6 +368,49 @@ private fun estimate(trail: Trail, mph: Double? = null): String {
     val speed = mph ?: if (UseType.BIKE in trail.uses) 10.0 else 3.0
     val minutes = (trail.lengthMiles / speed * 60).roundToInt().coerceAtLeast(1)
     return if (minutes < 90) "~$minutes min" else "~%.1f h".format(minutes / 60.0)
+}
+
+/** Amenities within a short walk of the trail, one chip per kind with a count. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun AtThisTrail(nearby: List<Amenity>) {
+    Column {
+        SectionTitle("At this trail")
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            nearby.groupBy { it.kind }.forEach { (kind, list) ->
+                Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surfaceContainer) {
+                    Text(
+                        "${kind.glyph}  ${kind.label}" + if (list.size > 1) " ×${list.size}" else "",
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** "Maintained by …" and a link to the trail's or its operator's page. */
+@Composable
+private fun MaintainedBy(trail: Trail) {
+    val context = LocalContext.current
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            trail.operator?.let { "Maintained by $it" } ?: "Trail page",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        // Only an http(s) page: map data is open to anyone to edit.
+        trail.website?.let { url ->
+            TextButton(onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } }) {
+                Text("Website")
+            }
+        }
+    }
 }
 
 /** The trail's open/closed state, with the board's message and how fresh it is. */

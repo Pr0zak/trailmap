@@ -71,6 +71,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.trailmap.data.DifficultyTier
 import com.trailmap.data.MtbDifficulty
+import com.trailmap.data.Amenity
+import com.trailmap.data.AmenityKind
 import com.trailmap.data.DiagLog
 import com.trailmap.data.Polyline
 import com.trailmap.data.RecordedTrack
@@ -103,6 +105,8 @@ private const val SRC_TRAILS = "trails"
 private const val LAYER_TRAILS = "trails-line"
 private const val LAYER_TRAILS_CASING = "trails-line-casing"
 private const val LAYER_DOUBLE_BLACK = "trails-double-black"
+private const val LAYER_ONEWAY = "trails-oneway"
+private const val IMG_ONEWAY = "oneway-arrow"
 private const val SRC_HIGHLIGHT = "trail-highlight"
 private const val LAYER_HIGHLIGHT = "trail-highlight-line"
 // Your activity from myvitals: every recorded track, the ridden stretches of trails, one
@@ -115,6 +119,9 @@ private const val SRC_TRACK_HL = "track-highlight"
 private const val LAYER_TRACK_HL = "track-highlight-line"
 private const val LAYER_TRACK_HL_CASING = "track-highlight-casing"
 private const val SRC_CONDITIONS = "conditions"
+private const val SRC_AMENITIES = "amenities"
+private const val LAYER_AMENITIES = "amenities-icon"
+private const val LAYER_AMENITY_PARKING = "amenities-parking"
 private const val LAYER_CONDITIONS = "conditions-dot"
 private const val LAYER_CONDITION_LABELS = "conditions-label"
 private const val EMPTY_FC = """{"type":"FeatureCollection","features":[]}"""
@@ -263,6 +270,14 @@ fun MapScreen(
         style.getSourceAs<GeoJsonSource>(SRC_TRACK_HL)?.setGeoJson(fc)
     }
 
+    // Trail amenities, when the layer is on.
+    LaunchedEffect(ui.amenitiesVersion, ui.showAmenities, styleRef.value) {
+        val style = styleRef.value ?: return@LaunchedEffect
+        val fc = if (!ui.showAmenities || ui.amenities.isEmpty()) EMPTY_FC else withContext(Dispatchers.Default) { amenitiesFc(ui.amenities) }
+        if (styleRef.value !== style) return@LaunchedEffect
+        style.getSourceAs<GeoJsonSource>(SRC_AMENITIES)?.setGeoJson(fc)
+    }
+
     // Trailheads on the status board, coloured open / closed.
     LaunchedEffect(ui.conditions, ui.showConditions, styleRef.value) {
         val style = styleRef.value ?: return@LaunchedEffect
@@ -327,6 +342,12 @@ fun MapScreen(
                             val pt = map.projection.toScreenLocation(ll)
                             val tol = 30f
                             val box = android.graphics.RectF(pt.x - tol, pt.y - tol, pt.x + tol, pt.y + tol)
+                            // An amenity icon sits on top of the trails, so it wins.
+                            val amen = map.queryRenderedFeatures(box, LAYER_AMENITIES, LAYER_AMENITY_PARKING).firstOrNull()
+                            if (amen != null && amen.hasProperty("id")) {
+                                vm.selectAmenity(amen.getStringProperty("id"))
+                                return@addOnMapClickListener true
+                            }
                             // A trailhead dot sits on top of the trails around it, so it wins.
                             val head = map.queryRenderedFeatures(box, LAYER_CONDITIONS).firstOrNull()
                             if (head != null && head.hasProperty("id")) {
@@ -372,6 +393,8 @@ fun MapScreen(
             onGetPackState = vm::addPackState,
             onDismissPackSuggestion = vm::dismissPackSuggestion,
             selectedCondition = ui.selectedConditionId?.let { id -> ui.conditions.firstOrNull { it.id == id } },
+            selectedAmenity = ui.selectedAmenityId?.let { id -> ui.amenities.firstOrNull { it.id == id } },
+            onSetAmenities = vm::setShowAmenities,
             onSetLayer = vm::setLayer,
             onOpenMyVitals = onOpenMyVitals,
             onClearTrack = vm::clearTrackHighlight,
@@ -402,6 +425,8 @@ internal fun BoxScope.MapOverlays(
     onGetPackState: (String) -> Unit = {},
     onDismissPackSuggestion: () -> Unit = {},
     selectedCondition: TrailStatus? = null,
+    selectedAmenity: Amenity? = null,
+    onSetAmenities: (Boolean) -> Unit = {},
     onSetLayer: (YouLayer, Boolean) -> Unit = { _, _ -> },
     onOpenMyVitals: () -> Unit = {},
     onClearTrack: () -> Unit = {},
@@ -567,7 +592,7 @@ internal fun BoxScope.MapOverlays(
                     tracks = ui.showTracks && ui.recorded.isNotEmpty(),
                 )
                 Spacer(Modifier.weight(1f))
-                MapButtons(ui, onSetTheme, onOpenOffline, onRecenter, onSetLayer, onOpenMyVitals)
+                MapButtons(ui, onSetTheme, onOpenOffline, onRecenter, onSetLayer, onOpenMyVitals, onSetAmenities)
             }
             // peek card — only for the trail the user tapped (nothing auto-selected at startup)
             if (selectedTrail != null) {
@@ -585,6 +610,12 @@ internal fun BoxScope.MapOverlays(
             } else if (selectedCondition != null) {
                 ConditionPeekCard(
                     status = selectedCondition,
+                    onClose = onClearSelection,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                )
+            } else if (selectedAmenity != null) {
+                AmenityPeekCard(
+                    amenity = selectedAmenity,
                     onClose = onClearSelection,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
                 )
@@ -610,6 +641,7 @@ private fun MapButtons(
     onRecenter: () -> Unit,
     onSetLayer: (YouLayer, Boolean) -> Unit,
     onOpenMyVitals: () -> Unit,
+    onSetAmenities: (Boolean) -> Unit = {},
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -648,6 +680,12 @@ private fun MapButtons(
                         },
                     )
                 }
+                androidx.compose.material3.HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text("Amenities") },
+                    leadingIcon = { androidx.compose.material3.Checkbox(checked = ui.showAmenities, onCheckedChange = null) },
+                    onClick = { onSetAmenities(!ui.showAmenities) },
+                )
                 androidx.compose.material3.HorizontalDivider()
                 Text(
                     "Your activity",
@@ -723,7 +761,7 @@ private fun StatusPill(text: String) {
 }
 
 /**
- * One-line map color key: surface colors in ALL mode, the four trail-sign difficulty colours in MTB mode.
+ * Map color key: surface colors in ALL mode, the six trail-sign difficulty colours in MTB mode.
  * The swatches are the line colors [trailColorExpr] draws — not the badge fills, which are
  * darker so their white labels stay readable.
  */
@@ -777,15 +815,21 @@ private fun MapLegend(
 @Composable
 private fun LegendColors(mode: MapMode, dark: Boolean) {
     if (mode == MapMode.MTB) {
-        Row(
-            Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        // Six levels in three rows of two, easiest first: a row of three crowded the map buttons.
+        Column(
+            Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            DifficultyTier.entries.forEach { tier ->
-                val (light, darkColor) = TIER_LINE_COLORS.getValue(tier)
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    TierSwatch(Color((if (dark) darkColor else light).toInt()), tier, dark)
-                    Text("${tier.symbol} ${tier.label}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+            DifficultyTier.entries.chunked(2).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    row.forEach { tier ->
+                        val (light, darkColor) = TIER_LINE_COLORS.getValue(tier)
+                        Row(Modifier.width(112.dp), verticalAlignment = Alignment.CenterVertically) {
+                            TierSwatch(Color((if (dark) darkColor else light).toInt()), tier, dark)
+                            Spacer(Modifier.size(4.dp))
+                            Text("${tier.symbol} ${tier.label}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
+                        }
+                    }
                 }
             }
         }
@@ -809,11 +853,15 @@ private fun LegendColors(mode: MapMode, dark: Boolean) {
 /** A legend swatch drawn like the line: white rim on the dark map, dashed centre for expert. */
 @Composable
 private fun TierSwatch(color: Color, tier: DifficultyTier, dark: Boolean) {
-    val rim = if (dark && color.luminance() < 0.05f) Modifier.border(1.dp, Color.White, RoundedCornerShape(50)) else Modifier
-    Box(Modifier.width(30.dp).height(6.dp).clip(RoundedCornerShape(50)).then(rim).background(color)) {
+    val rim = when {
+        dark && color.luminance() < 0.05f -> Modifier.border(1.dp, Color.White, RoundedCornerShape(50))
+        !dark && color.luminance() > 0.9f -> Modifier.border(1.dp, Color(0xFF333333), RoundedCornerShape(50))
+        else -> Modifier
+    }
+    Box(Modifier.width(22.dp).height(6.dp).clip(RoundedCornerShape(50)).then(rim).background(color)) {
         if (tier == DifficultyTier.DOUBLE_BLACK) {
             Row(Modifier.align(Alignment.Center), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                repeat(4) { Box(Modifier.width(4.dp).height(2.dp).background(Color.White)) }
+                repeat(3) { Box(Modifier.width(3.dp).height(2.dp).background(Color.White)) }
             }
         }
     }
@@ -826,15 +874,18 @@ private fun Swatch(color: Color, widthDp: Int) = Box(
 
 /**
  * Trail-sign line colours as (light basemap, dark basemap), shared by the lines and legend:
- * green = easy, blue = intermediate, black = advanced and expert (expert also gets a white
- * dashed centre, [LAYER_DOUBLE_BLACK]). Black stays black on the dark map; the solid white
- * casing [difficultyCasingExpr] gives it there is what keeps it visible.
+ * white, green, blue, black, double black (black with a white dashed centre,
+ * [LAYER_DOUBLE_BLACK]) and orange for pro lines. White and black keep their sign colours on
+ * both maps; [difficultyCasingExpr] gives white a dark casing on the light map and black a
+ * white one on the dark map, which is what keeps them visible.
  */
 private val TIER_LINE_COLORS = mapOf(
+    DifficultyTier.WHITE to (0xFFFFFFFF to 0xFFFFFFFF),
     DifficultyTier.GREEN to (0xFF2E9E44 to 0xFF4CC86A),
     DifficultyTier.BLUE to (0xFF1E6FD9 to 0xFF4C9BFF),
     DifficultyTier.BLACK to (0xFF111111 to 0xFF000000),
     DifficultyTier.DOUBLE_BLACK to (0xFF111111 to 0xFF000000),
+    DifficultyTier.PRO to (0xFFF57C00 to 0xFFFF9800),
 )
 
 /** mtb:scale 0..6 → its tier's line colour, indexed by scale. */
@@ -974,6 +1025,68 @@ private fun ConditionPeekCard(status: TrailStatus, onClose: () -> Unit, modifier
     }
 }
 
+/**
+ * The card for a tapped amenity: what it is, its name, fee and hours, and who runs it with a
+ * link to their page when the map has one.
+ */
+@Composable
+internal fun AmenityPeekCard(amenity: Amenity, onClose: () -> Unit, modifier: Modifier) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        shadowElevation = 8.dp,
+    ) {
+        Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(amenity.kind.glyph, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(end = 8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        amenity.name ?: amenity.kind.label,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                    if (amenity.name != null) {
+                        Text(amenity.kind.label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                IconButton(onClick = onClose) {
+                    Icon(Icons.Filled.Close, contentDescription = "Dismiss")
+                }
+            }
+            val facts = listOfNotNull(amenity.feeText, amenity.hours)
+            if (facts.isNotEmpty()) {
+                Text(facts.joinToString(" · "), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 6.dp, end = 8.dp))
+            }
+            amenity.operator?.let {
+                Text("Run by $it", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp, end = 8.dp))
+            }
+            Row {
+                TextButton(
+                    onClick = {
+                        val p = amenity.point
+                        runCatching {
+                            context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("geo:${p.lat},${p.lon}?q=${p.lat},${p.lon}")))
+                        }
+                    },
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 0.dp),
+                ) { Text("Directions") }
+                // Only an http(s) page: map data is open to anyone to edit.
+                amenity.website?.let { url ->
+                    Spacer(Modifier.size(16.dp))
+                    TextButton(
+                        onClick = { runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))) } },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 0.dp),
+                    ) { Text("Website") }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun PeekStat(value: String, label: String) = Column {
     Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -992,6 +1105,7 @@ private fun applyTrailLayers(style: Style, dark: Boolean) {
     style.addSource(GeoJsonSource(SRC_RIDDEN, EMPTY_FC))
     style.addSource(GeoJsonSource(SRC_TRACK_HL, EMPTY_FC))
     style.addSource(GeoJsonSource(SRC_CONDITIONS, EMPTY_FC))
+    style.addSource(GeoJsonSource(SRC_AMENITIES, EMPTY_FC))
     // Every recorded track, thin and under everything: where you've been, trail or not.
     style.addLayer(
         LineLayer(LAYER_TRACKS, SRC_TRACKS).withProperties(
@@ -1061,6 +1175,42 @@ private fun applyTrailLayers(style: Style, dark: Boolean) {
             ),
         ),
     )
+    // One-way pieces: small chevrons along the line pointing the way you may ride, from z13
+    // (below that they would crowd into a smear). oneway=-1 pieces run against their drawn
+    // direction, so their chevrons are turned round.
+    style.addImage(IMG_ONEWAY, onewayArrow())
+    style.addLayer(
+        SymbolLayer(LAYER_ONEWAY, SRC_TRAILS).withProperties(
+            PropertyFactory.symbolPlacement(Property.SYMBOL_PLACEMENT_LINE),
+            PropertyFactory.symbolSpacing(60f),
+            PropertyFactory.iconImage(IMG_ONEWAY),
+            PropertyFactory.iconSize(
+                Expression.interpolate(Expression.linear(), Expression.zoom(), Expression.stop(13, 0.55f), Expression.stop(17, 0.9f)),
+            ),
+            PropertyFactory.iconRotate(
+                Expression.switchCase(Expression.eq(Expression.get("oneway"), Expression.literal(-1)), Expression.literal(180f), Expression.literal(0f)),
+            ),
+            PropertyFactory.iconRotationAlignment(Property.ICON_ROTATION_ALIGNMENT_MAP),
+            PropertyFactory.iconAllowOverlap(true),
+            PropertyFactory.iconIgnorePlacement(true),
+        ).withFilter(Expression.neq(Expression.get("oneway"), Expression.literal(0))).also { it.minZoom = 13f },
+    )
+    // Amenities: an icon per kind, over the trails. Parking only from z15 — a metro holds
+    // hundreds of trail-side car parks and they bury the rest further out.
+    AmenityKind.entries.forEach { style.addImage(amenityImage(it), amenityIcon(it)) }
+    fun amenityLayer(id: String, parking: Boolean, minZoom: Float) = SymbolLayer(id, SRC_AMENITIES).withProperties(
+        PropertyFactory.iconImage(Expression.concat(Expression.literal("amen-"), Expression.get("kind"))),
+        PropertyFactory.iconSize(
+            Expression.interpolate(Expression.linear(), Expression.zoom(), Expression.stop(13, 0.8f), Expression.stop(16, 1.0f)),
+        ),
+        PropertyFactory.iconAllowOverlap(true),
+        PropertyFactory.iconIgnorePlacement(true),
+    ).withFilter(
+        if (parking) Expression.eq(Expression.get("kind"), Expression.literal(AmenityKind.PARKING.name))
+        else Expression.neq(Expression.get("kind"), Expression.literal(AmenityKind.PARKING.name)),
+    ).also { it.minZoom = minZoom }
+    style.addLayer(amenityLayer(LAYER_AMENITY_PARKING, parking = true, minZoom = 15f))
+    style.addLayer(amenityLayer(LAYER_AMENITIES, parking = false, minZoom = 13f))
     // One recorded activity, on top of the trails it used.
     style.addLayer(
         LineLayer(LAYER_TRACK_HL_CASING, SRC_TRACK_HL).withProperties(
@@ -1118,6 +1268,80 @@ private fun conditionColorExpr(): Expression = Expression.match(
 private fun Color.toArgbInt(): Int = android.graphics.Color.argb(
     (alpha * 255).toInt(), (red * 255).toInt(), (green * 255).toInt(), (blue * 255).toInt(),
 )
+
+private fun amenityImage(kind: AmenityKind) = "amen-${kind.name}"
+
+/**
+ * An amenity's map icon, ~24 dp: the blue "P" square everyone reads as parking, and for the
+ * rest the kind's emoji on a white disc with a dark rim, which shows on either basemap.
+ */
+private fun amenityIcon(kind: AmenityKind): android.graphics.Bitmap {
+    val density = android.content.res.Resources.getSystem().displayMetrics.density
+    val size = (24 * density).toInt().coerceAtLeast(24)
+    val bmp = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+    val c = android.graphics.Canvas(bmp)
+    val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+    val half = size / 2f
+    val rim = 1.5f * density
+    if (kind == AmenityKind.PARKING) {
+        val r = android.graphics.RectF(rim, rim, size - rim, size - rim)
+        paint.color = 0xFFFFFFFF.toInt()
+        c.drawRoundRect(r, 5 * density, 5 * density, paint)
+        paint.color = 0xFF1565C0.toInt()
+        r.inset(rim, rim)
+        c.drawRoundRect(r, 4 * density, 4 * density, paint)
+        paint.color = 0xFFFFFFFF.toInt()
+        paint.typeface = android.graphics.Typeface.DEFAULT_BOLD
+    } else {
+        paint.color = 0xFF37474F.toInt()
+        c.drawCircle(half, half, half, paint)
+        paint.color = 0xFFFFFFFF.toInt()
+        c.drawCircle(half, half, half - rim, paint)
+    }
+    paint.textAlign = android.graphics.Paint.Align.CENTER
+    paint.textSize = size * if (kind == AmenityKind.PARKING) 0.62f else 0.55f
+    val fm = paint.fontMetrics
+    c.drawText(if (kind == AmenityKind.PARKING) "P" else kind.glyph, half, half - (fm.ascent + fm.descent) / 2, paint)
+    return bmp
+}
+
+/** Amenities as GeoJSON points carrying their id and kind. */
+private fun amenitiesFc(amenities: List<Amenity>): String {
+    val sb = StringBuilder(64 + amenities.size * 96)
+    sb.append("{\"type\":\"FeatureCollection\",\"features\":[")
+    amenities.forEachIndexed { i, a ->
+        if (i > 0) sb.append(',')
+        sb.append("{\"type\":\"Feature\",\"properties\":{\"id\":")
+        appendJsonString(sb, a.id)
+        sb.append(",\"kind\":\"").append(a.kind.name).append("\"},\"geometry\":{\"type\":\"Point\",\"coordinates\":[")
+        sb.append(round5(a.point.lon)).append(',').append(round5(a.point.lat)).append("]}}")
+    }
+    sb.append("]}")
+    return sb.toString()
+}
+
+/**
+ * The one-way chevron, pointing along +x (a line-placed symbol's direction of travel): dark
+ * with a white halo, so it reads on every line colour and both basemaps.
+ */
+private fun onewayArrow(): android.graphics.Bitmap {
+    val size = 32
+    val bmp = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+    val c = android.graphics.Canvas(bmp)
+    val path = android.graphics.Path().apply {
+        moveTo(10f, 7f); lineTo(22f, 16f); lineTo(10f, 25f)
+    }
+    val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        style = android.graphics.Paint.Style.STROKE
+        strokeCap = android.graphics.Paint.Cap.ROUND
+        strokeJoin = android.graphics.Paint.Join.ROUND
+    }
+    paint.color = 0xF2FFFFFF.toInt(); paint.strokeWidth = 9f
+    c.drawPath(path, paint)
+    paint.color = 0xFF1A1A1A.toInt(); paint.strokeWidth = 4.5f
+    c.drawPath(path, paint)
+    return bmp
+}
 
 /** Turns on the location dot (the caller has checked the permission). */
 @SuppressLint("MissingPermission")
@@ -1182,11 +1406,16 @@ internal fun trailColorExpr(dark: Boolean): Expression {
  */
 private fun difficultyCasingExpr(dark: Boolean): Expression {
     val normal = Expression.color(if (dark) 0x66FFFFFF.toInt() else 0x55000000.toInt())
-    if (!dark) return normal
-    val black = MtbDifficulty.entries.filter { it.tier == DifficultyTier.BLACK || it.tier == DifficultyTier.DOUBLE_BLACK }
+    // The sign colour that would vanish into this basemap: black on dark, white on light.
+    val (vanishing, casing) = if (dark) {
+        setOf(DifficultyTier.BLACK, DifficultyTier.DOUBLE_BLACK) to 0xE6FFFFFF.toInt()
+    } else {
+        setOf(DifficultyTier.WHITE) to 0xE6333333.toInt()
+    }
+    val stops = MtbDifficulty.entries.filter { it.tier in vanishing }
     return Expression.match(
         Expression.get("mtb"),
-        *black.flatMap { listOf(Expression.literal("${it.scale}"), Expression.color(0xE6FFFFFF.toInt())) }.toTypedArray(),
+        *stops.flatMap { listOf(Expression.literal("${it.scale}"), Expression.color(casing)) }.toTypedArray(),
         normal,
     )
 }
@@ -1235,8 +1464,9 @@ private fun trailsFc(trails: List<Trail>, horse: Boolean = false): String {
     sb.append("{\"type\":\"FeatureCollection\",\"features\":[")
     var first = true
     for (trail in trails) {
-        val mtb = trail.mtbScale?.toString() ?: "none"
         for ((index, path) in trail.paths.withIndex()) {
+            // Per piece: a loop's sections can be rated differently.
+            val mtb = (trail.mtbScalePaths.getOrNull(index) ?: trail.mtbScale)?.toString() ?: "none"
             if (path.size < 2) continue
             if (!first) sb.append(',')
             first = false
@@ -1245,6 +1475,7 @@ private fun trailsFc(trails: List<Trail>, horse: Boolean = false): String {
             sb.append(",\"surface\":\"").append(trail.surface.name)
             sb.append("\",\"mtb\":\"").append(mtb)
             sb.append("\",\"horse\":").append(horse && trail.horseTrailPaths.getOrElse(index) { false })
+            sb.append(",\"oneway\":").append(trail.onewayPaths.getOrElse(index) { 0 })
             sb.append("},\"geometry\":{\"type\":\"LineString\",\"coordinates\":[")
             for (i in path.indices) {
                 if (i > 0) sb.append(',')

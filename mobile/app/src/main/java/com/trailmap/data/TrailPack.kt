@@ -49,6 +49,8 @@ class TrailPacks(filesDir: File) {
         val covered: Set<String> = emptySet(),
         /** Rings of [lon, lat], padded to contain the whole region. */
         val outline: List<List<List<Double>>> = emptyList(),
+        /** Tile kinds the pack holds; empty on packs built before the list existed. */
+        val kinds: List<String> = emptyList(),
     )
 
     /** What was installed, as the release described it — compared on the next update check. */
@@ -383,6 +385,15 @@ class TrailPacks(filesDir: File) {
         val covered = snapshot.values.any { "${x}_$y" in it.meta.covered } || outlinesCover(snapshot.values, x, y)
         synchronized(coverCache) { coverCache[key] = covered }
         return covered
+    }
+
+    /**
+     * Every installed pack holds [kind]. Amenities (`amen`) arrived after the first packs, and
+     * a pack built before them would answer "no amenities here" rather than "not known".
+     */
+    fun hasKind(kind: String): Boolean {
+        val snapshot = packs
+        return snapshot.isNotEmpty() && snapshot.values.all { kind in it.meta.kinds }
     }
 
     /** Every point of a 5×5 grid over the tile lies inside some installed state. */

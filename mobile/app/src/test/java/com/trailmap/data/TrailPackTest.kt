@@ -41,13 +41,15 @@ class TrailPackTest {
         covered: List<String> = emptyList(),
         tiles: Map<String, List<String>> = emptyMap(),
         schema: Int = TrailPacks.SCHEMA,
+        kinds: List<String>? = null,
     ): File {
         file.parentFile!!.mkdirs()
         ZipOutputStream(file.outputStream()).use { z ->
             val ring = outline?.let { o -> "[[" + (o + o.first()).joinToString(",") { "[${it.first},${it.second}]" } + "]]" } ?: "[]"
             val meta = """{"schema":$schema,"tileDeg":0.25,"regions":[${regions.joinToString(",") { "\"$it\"" }}],""" +
                 """"built":"2026-09-26T00:00:00Z","osmTimestamp":"2026-09-25T20:24:36Z",""" +
-                """"covered":[${covered.joinToString(",") { "\"$it\"" }}],"outline":$ring}"""
+                """"covered":[${covered.joinToString(",") { "\"$it\"" }}],"outline":$ring""" +
+                (kinds?.let { k -> ""","kinds":[${k.joinToString(",") { "\"$it\"" }}]""" } ?: "") + "}"
             z.putNextEntry(ZipEntry("meta.json"))
             z.write(meta.toByteArray())
             for ((name, elements) in tiles) {
@@ -203,6 +205,101 @@ class TrailPackTest {
         assertTrue(byName.getValue("Appaloosa Equestrian Trail").horseTrail)
         assertEquals(listOf(true), byName.getValue("Appaloosa Equestrian Trail").horseTrailPaths)
         assertFalse("multi-use: bikes allowed", byName.getValue("Flint Hills Trail").horseTrail)
+    }
+
+    /**
+     * A route=mtb relation rarely carries mtb:scale itself — none of Kansas City's 48 do — but
+     * its member ways usually do. Their ratings must survive: per piece for the map, the
+     * hardest for the trail's badge. A rating on the relation still wins.
+     */
+    @Test fun routeRelationsTakeTheirWaysRatings() = runBlocking {
+        val files = tmp.newFolder("files")
+        fun geom(lat: Double) = """[{"lat":$lat,"lon":-94.40},{"lat":${lat + 0.005},"lon":-94.395}]"""
+        fun w(id: Long, scale: Int, lat: Double) =
+            """{"type":"way","id":$id,"tags":{"name":"Wudchuk Run","highway":"path","mtb:scale":"$scale"},"geometry":${geom(lat)}}"""
+        fun rel(id: Long, name: String, extra: String, vararg members: Pair<Long, Double>) =
+            """{"type":"relation","id":$id,"tags":{"name":"$name","route":"mtb"$extra},"members":[""" +
+                members.joinToString(",") { (ref, lat) -> """{"type":"way","ref":$ref,"role":"","geometry":${geom(lat)}}""" } + "]}"
+        val tiles = listOf(
+            w(20, 1, 38.980), w(21, 2, 38.986),
+            rel(30, "Wudchuk Run", "", 20L to 38.980, 21L to 38.986),
+            rel(31, "Rated Loop", ""","mtb:scale":"3"""", 22L to 38.992),
+        )
+        pack(stateFile(files, "missouri"), listOf("missouri"), missouri, tiles = mapOf("mtb/-378_155.json" to tiles))
+        val client = OverpassClient(cacheDir = tmp.newFolder("cache"), endpoints = emptyList(), pack = TrailPacks(files))
+        val byName = client.fetchTrails(GeoPoint(38.985, -94.40), 16_000, mtb = true, withParks = false)
+            .trails.associateBy { it.name }
+
+        val loop = byName.getValue("Wudchuk Run")
+        assertEquals(2, loop.mtbScale)
+        assertEquals(listOf(1, 2), loop.mtbScalePaths)
+        assertEquals(3, byName.getValue("Rated Loop").mtbScale)
+    }
+
+    /** Downhill-only lines: oneway per piece, bike-specific tags first, -1 means reversed. */
+    @Test fun oneWayPiecesKeepTheirDirection() = runBlocking {
+        val files = tmp.newFolder("files")
+        fun w(id: Long, name: String, extra: String, lat: Double) =
+            """{"type":"way","id":$id,"tags":{"name":"$name","highway":"path","mtb:scale":"3"$extra},""" +
+                """"geometry":[{"lat":$lat,"lon":-94.40},{"lat":${lat + 0.005},"lon":-94.395}]}"""
+        val tiles = listOf(
+            w(40, "Customline", ""","oneway":"yes"""", 38.980),
+            w(41, "Customline", "", 38.986),
+            w(42, "Back Alley", ""","oneway":"-1"""", 38.990),
+            w(43, "Two Way", ""","oneway":"yes","oneway:bicycle":"no"""", 38.995),
+        )
+        pack(stateFile(files, "missouri"), listOf("missouri"), missouri, tiles = mapOf("mtb/-378_155.json" to tiles))
+        val client = OverpassClient(cacheDir = tmp.newFolder("cache"), endpoints = emptyList(), pack = TrailPacks(files))
+        val byName = client.fetchTrails(GeoPoint(38.985, -94.40), 16_000, mtb = true, withParks = false)
+            .trails.associateBy { it.name }
+        assertEquals(listOf(1, 0), byName.getValue("Customline").onewayPaths)
+        assertEquals(listOf(-1), byName.getValue("Back Alley").onewayPaths)
+        assertEquals(emptyList<Int>(), byName.getValue("Two Way").onewayPaths)
+    }
+
+    /** Amenities come from a pack that has them, as Overpass `out center` points. */
+    @Test fun amenitiesComeFromPacksThatHaveThem() = runBlocking {
+        val files = tmp.newFolder("files")
+        val tiles = listOf(
+            """{"type":"node","id":1,"tags":{"highway":"trailhead","name":"Brookside Trailhead"},"lat":38.985,"lon":-94.40}""",
+            """{"type":"way","id":2,"tags":{"amenity":"parking","fee":"no"},"center":{"lat":38.986,"lon":-94.401}}""",
+            """{"type":"node","id":3,"tags":{"amenity":"drinking_water"},"lat":39.9,"lon":-94.40}""", // far outside the circle
+        )
+        pack(stateFile(files, "missouri"), listOf("missouri"), missouri, tiles = mapOf("amen/-378_155.json" to tiles),
+            kinds = listOf("all", "amen", "mtb", "parks"))
+        val client = OverpassClient(cacheDir = tmp.newFolder("cache"), endpoints = emptyList(), pack = TrailPacks(files))
+        val found = client.fetchAmenities(GeoPoint(38.985, -94.40), 16_000).associateBy { it.id }
+        assertEquals(setOf("node_1", "way_2"), found.keys)
+        assertEquals(AmenityKind.TRAILHEAD, found.getValue("node_1").kind)
+        assertEquals("Brookside Trailhead", found.getValue("node_1").name)
+        assertEquals("Free", found.getValue("way_2").feeText)
+    }
+
+    /** A pack from before amenities must not answer "none here": it goes to Overpass instead. */
+    @Test fun packsWithoutAmenitiesAreNotAskedForThem() = runBlocking {
+        val files = tmp.newFolder("files")
+        pack(stateFile(files, "missouri"), listOf("missouri"), missouri)
+        val hits = java.util.concurrent.atomic.AtomicInteger()
+        val client = OverpassClient(cacheDir = tmp.newFolder("cache"), endpoints = listOf(countingServer(hits)), pack = TrailPacks(files))
+        runCatching { client.fetchAmenities(GeoPoint(38.985, -94.40), 16_000) }
+        assertTrue(hits.get() > 0)
+    }
+
+    /** Who maintains a trail: the relation's own tags, else what most of its length says. */
+    @Test fun operatorAndWebsiteFollowTheTrail() = runBlocking {
+        val files = tmp.newFolder("files")
+        fun w(id: Long, lat: Double, km: Double, extra: String) =
+            """{"type":"way","id":$id,"tags":{"name":"Indian Creek Trail","highway":"cycleway"$extra},""" +
+                """"geometry":[{"lat":$lat,"lon":-94.40},{"lat":${lat + km / 111.0},"lon":-94.40}]}"""
+        val tiles = listOf(
+            w(50, 38.980, 1.0, ""","operator":"Riverside Parks Dept","website":"https://example.org/op""""),
+            w(51, 38.990, 0.2, ""","operator":"Hillcrest Parks Dept","website":"javascript:alert(1)""""),
+        )
+        pack(stateFile(files, "missouri"), listOf("missouri"), missouri, tiles = mapOf("all/-378_155.json" to tiles))
+        val client = OverpassClient(cacheDir = tmp.newFolder("cache"), endpoints = emptyList(), pack = TrailPacks(files))
+        val trail = client.fetchTrails(GeoPoint(38.985, -94.40), 16_000).trails.single()
+        assertEquals("Riverside Parks Dept", trail.operator)
+        assertEquals("https://example.org/op", trail.website)
     }
 
     @Test fun wrongSchemaIsIgnored() {

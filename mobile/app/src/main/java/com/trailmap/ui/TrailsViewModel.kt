@@ -9,6 +9,8 @@ import com.trailmap.data.ElevationProfile
 import com.trailmap.data.Geo
 import com.trailmap.data.GeoPoint
 import com.trailmap.data.HorseTrailFilter
+import com.trailmap.data.Amenities
+import com.trailmap.data.Amenity
 import com.trailmap.data.Locator
 import com.trailmap.data.OverpassClient
 import com.trailmap.data.Prefs
@@ -227,6 +229,14 @@ data class TrailsUiState(
     val highlightedTrackId: String? = null,
     /** Your average speeds, for the detail screen's time estimate. */
     val pace: PersonalPace? = null,
+    /** Trailheads, parking, toilets, water, repair stands, shelters around the loaded areas. */
+    val amenities: List<Amenity> = emptyList(),
+    /** Bumped whenever [amenities] changes — a cheap key for the map's effect. */
+    val amenitiesVersion: Int = 0,
+    /** The Layers menu's "Amenities" switch (persisted). */
+    val showAmenities: Boolean = true,
+    /** An amenity tapped on the map. */
+    val selectedAmenityId: String? = null,
 ) {
     /** [recorded] by id. */
     val recordedById: Map<String, RecordedTrack> by lazy { recorded.associateBy { it.id } }
@@ -363,6 +373,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
             showRidden = prefs.layer(YouLayer.RIDDEN.name, YouLayer.RIDDEN.default),
             showTracks = prefs.layer(YouLayer.TRACKS.name, YouLayer.TRACKS.default),
             showConditions = prefs.layer(YouLayer.CONDITIONS.name, YouLayer.CONDITIONS.default),
+            showAmenities = prefs.layer(AMENITIES_LAYER, true),
         ),
     )
     val state: StateFlow<TrailsUiState> = _state.asStateFlow()
@@ -489,6 +500,12 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
      * the middle of an 89 km screen. Bounded, because each entry retains its geometry.
      */
     private val loadedAreas = mutableListOf<LoadedArea>()
+
+    /**
+     * Amenities per loaded circle (keyed by centre and radius), most recently used last, and
+     * bounded like [loadedAreas]. Mode-independent: a car park is the same in ALL and MTB.
+     */
+    private val amenityAreas = LinkedHashMap<String, List<Amenity>>(16, 0.75f, true)
 
     private class LoadedArea(
         val center: GeoPoint,
@@ -676,6 +693,10 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
 
+                // Amenities for the circle just served: instant from a pack, cached for a week
+                // from Overpass. Same job, so a newer load cancels it.
+                loadAmenities(result.servedCenter, result.servedRadius, seq)
+
                 // MTB: the trails are up; now fetch the park polygons that name the systems.
                 // Same job, so a newer load cancels this too. The trail elements are memoized,
                 // so this second call only costs the park query.
@@ -708,6 +729,45 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    /**
+     * Fetch and fold in the amenities for one served circle, unless they are already held.
+     * Best-effort: a failure or timeout leaves the map without icons for that area, nothing
+     * more — no error banner over working trails.
+     */
+    private suspend fun loadAmenities(center: GeoPoint, radius: Int, seq: Int) {
+        val key = "${center.lat},${center.lon},$radius"
+        if (amenityAreas[key] == null) {
+            val found = runCatching {
+                withTimeoutOrNull(AMENITIES_BUDGET_MS) { overpass.fetchAmenities(center, radius) }
+            }.getOrElse { if (it is CancellationException) throw it else null }
+            if (found == null) {
+                DiagLog.log("amenities", "unavailable for a $radius m circle")
+                return
+            }
+            if (seq != loadSeq) return
+            amenityAreas[key] = found
+            while (amenityAreas.size > MAX_LOADED_AREAS) amenityAreas.remove(amenityAreas.keys.first())
+            DiagLog.log("amenities", "${found.size} in a $radius m circle")
+        }
+        val union = amenityAreas.values.flatten().distinctBy { it.id }
+        _state.update { s ->
+            if (s.amenities.size == union.size && s.amenities.map { it.id }.toSet() == union.map { it.id }.toSet()) s
+            else s.copy(amenities = union, amenitiesVersion = s.amenitiesVersion + 1)
+        }
+    }
+
+    /** Amenities close to [trail], for its detail page. */
+    fun amenitiesNear(trail: Trail): List<Amenity> = Amenities.near(trail, _state.value.amenities)
+
+    fun setShowAmenities(on: Boolean) {
+        prefs.setLayer(AMENITIES_LAYER, on)
+        _state.update { it.copy(showAmenities = on, selectedAmenityId = if (on) it.selectedAmenityId else null) }
+    }
+
+    /** An amenity tapped on the map. */
+    fun selectAmenity(id: String) =
+        _state.update { it.copy(selectedAmenityId = id, selectedTrailId = null, selectedConditionId = null) }
 
     fun setRadius(meters: Int) {
         if (_state.value.radiusMeters == meters) return // re-tapping the active chip is a no-op
@@ -1161,9 +1221,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Select a trail (tapped on the map) → peek card + map highlight. */
-    fun selectTrail(id: String) = _state.update { it.copy(selectedTrailId = id, selectedConditionId = null) }
+    fun selectTrail(id: String) = _state.update { it.copy(selectedTrailId = id, selectedConditionId = null, selectedAmenityId = null) }
 
-    fun clearSelection() = _state.update { it.copy(selectedTrailId = null, selectedConditionId = null) }
+    fun clearSelection() = _state.update { it.copy(selectedTrailId = null, selectedConditionId = null, selectedAmenityId = null) }
 
     // --- Rides (combine trails into a named ride with a total length) ---
 
@@ -1728,7 +1788,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** A trailhead tapped on the map. */
-    fun selectCondition(id: Long) = _state.update { it.copy(selectedConditionId = id, selectedTrailId = null) }
+    fun selectCondition(id: Long) = _state.update { it.copy(selectedConditionId = id, selectedTrailId = null, selectedAmenityId = null) }
 
     /** Draw a recorded activity on the map and frame it. */
     fun showTrackOnMap(trackId: String) {
@@ -1946,5 +2006,11 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
 
         /** How long the follow-up park query may take before systems keep their fallback names. */
         private const val PARKS_BUDGET_MS = 60_000L
+
+        /** Amenities are extras: give up on them well before the user would notice a wait. */
+        private const val AMENITIES_BUDGET_MS = 30_000L
+
+        /** Prefs key for the Layers menu's Amenities switch. */
+        private const val AMENITIES_LAYER = "AMENITIES"
     }
 }

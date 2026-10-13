@@ -11,6 +11,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import com.trailmap.data.ElevPoint
+import com.trailmap.data.Amenity
+import com.trailmap.data.AmenityKind
 import com.trailmap.data.ElevationProfile
 import com.trailmap.data.GeoPoint
 import com.trailmap.data.Ride
@@ -59,6 +61,7 @@ object Samples {
         mtb: Int? = null, park: String? = null,
         mix: Map<SurfaceType, Double> = mapOf(surface to 1.0),
         horse: Boolean = false,
+        operator: String? = null, website: String? = null,
     ): Trail {
         val start = GeoPoint(KC.lat + dLat, KC.lon + dLon)
         val path = wiggle(start, bearing, km, seed)
@@ -68,6 +71,7 @@ object Samples {
             lengthMeters = Geo.lengthMeters(path),
             distanceMeters = dist, paths = listOf(path), center = path[path.size / 2],
             mtbScale = mtb, parkName = park, horseTrailPaths = listOf(horse), horseTrail = horse,
+            operator = operator, website = website,
         )
     }
 
@@ -76,7 +80,8 @@ object Samples {
 
     val trails: List<Trail> = listOf(
         trail("name_trolley_track_trail", "Trolley Track Trail", SurfaceType.GRAVEL, both, -0.03, 0.005, 175.0, 9.0, 1,
-            mix = mapOf(SurfaceType.GRAVEL to 0.8, SurfaceType.PAVED to 0.2)),
+            mix = mapOf(SurfaceType.GRAVEL to 0.8, SurfaceType.PAVED to 0.2),
+            operator = "Kansas City Parks & Recreation", website = "https://example.org/trolley-track"),
         trail("name_brush_creek_trail", "Brush Creek Trail", SurfaceType.PAVED, both, -0.035, -0.02, 95.0, 6.0, 2),
         trail("name_line_creek_trail", "Line Creek Trail", SurfaceType.PAVED, both, 0.09, -0.04, 20.0, 11.0, 3),
         trail("name_indian_creek_trail", "Indian Creek Trail", SurfaceType.PAVED, both, -0.14, -0.06, 80.0, 14.0, 4,
@@ -108,6 +113,20 @@ object Samples {
         Ride("r3", "Long gravel day", listOf(rt(trails[8]), rt(trails[0]), rt(trails[3]))),
     )
 
+    /** Made-up amenities along the Trolley Track Trail (and one far from any trail). */
+    val amenities: List<Amenity> = trails[0].paths[0].let { p ->
+        listOf(
+            Amenity("node_1", AmenityKind.TRAILHEAD, p[2], name = "Brookside Trailhead"),
+            Amenity("way_2", AmenityKind.PARKING, p[3], fee = "no"),
+            Amenity("way_3", AmenityKind.PARKING, p[p.size / 2], fee = "no"),
+            Amenity("node_4", AmenityKind.WATER, p[4]),
+            Amenity("node_5", AmenityKind.REPAIR, p[p.size / 2], operator = "BikeWalkKC"),
+            Amenity("node_6", AmenityKind.TOILETS, p[p.size - 3], hours = "Apr-Oct 06:00-22:00",
+                operator = "Kansas City Parks & Recreation", website = "https://example.org/restrooms", fee = "no"),
+            Amenity("node_7", AmenityKind.SHELTER, GeoPoint(KC.lat + 0.4, KC.lon + 0.4)),
+        )
+    }
+
     val ui = TrailsUiState(
         trails = trails,
         trailsVersion = 1,
@@ -116,6 +135,8 @@ object Samples {
         rides = rides,
         loadedCenter = KC,
         loadedRadiusMeters = 16000,
+        amenities = amenities,
+        amenitiesVersion = 1,
         // Not connected, and known not to be: the myvitals screen shows its form.
         myVitals = MyVitalsUi(settingsLoaded = true),
     )

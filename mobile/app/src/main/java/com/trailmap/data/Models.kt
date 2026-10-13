@@ -77,35 +77,46 @@ enum class HorseTrailFilter(val label: String) { SHOW("Show"), HIDE("Hide"), ONL
 enum class UseType(val label: String) { WALK("Walking"), BIKE("Biking"), HORSE("Horseback") }
 
 /**
- * The trail-sign colour a rating maps to, as on ski runs and IMBA trail signs: green circle
- * (easy), blue square (intermediate), black diamond (advanced), double black (expert).
+ * The trail-sign colour a rating maps to — Trailforks' six-level scale, which extends the
+ * ski/IMBA signs: white (easiest), green circle (easy), blue square (intermediate), black
+ * diamond (advanced), double black (expert) and orange "pro line" (beyond expert).
  */
 enum class DifficultyTier(val label: String, val symbol: String) {
+    WHITE("Easiest", "○"),
     GREEN("Easy", "●"),
     BLUE("Intermediate", "■"),
     BLACK("Advanced", "◆"),
     DOUBLE_BLACK("Expert", "◆◆"),
+    PRO("Pro", "▲"),
 }
 
 /**
- * OSM mtb:scale (0..6) mapped to difficulty labels and trail-sign colours: S0-S1 green,
- * S2 blue, S3 black, S4-S6 double black. Badge fills carry white label text (>= 4.5:1); the
- * map's line colours are separate — see MTB_LINE_COLORS in MapScreen.
+ * OSM mtb:scale (0..6) mapped to difficulty labels and trail-sign colours: S0 white, S1 green,
+ * S2 blue, S3 black, S4 double black, S5-S6 pro (orange). Badge fills keep their label text at
+ * >= 4.5:1 ([onColor]); the map's line colours are separate — see TIER_LINE_COLORS in MapScreen.
  */
 enum class MtbDifficulty(val scale: Int, val label: String, val tier: DifficultyTier) {
-    S0(0, "Beginner", DifficultyTier.GREEN),
+    S0(0, "Beginner", DifficultyTier.WHITE),
     S1(1, "Easy", DifficultyTier.GREEN),
     S2(2, "Intermediate", DifficultyTier.BLUE),
     S3(3, "Advanced", DifficultyTier.BLACK),
     S4(4, "Expert", DifficultyTier.DOUBLE_BLACK),
-    S5(5, "Expert+", DifficultyTier.DOUBLE_BLACK),
-    S6(6, "Extreme", DifficultyTier.DOUBLE_BLACK);
+    S5(5, "Expert+", DifficultyTier.PRO),
+    S6(6, "Extreme", DifficultyTier.PRO);
 
     val color: Color get() = when (tier) {
+        DifficultyTier.WHITE -> Color(0xFFFFFFFF)
         DifficultyTier.GREEN -> Color(0xFF2E7D32)
         DifficultyTier.BLUE -> Color(0xFF1565C0)
         DifficultyTier.BLACK, DifficultyTier.DOUBLE_BLACK -> Color(0xFF1A1A1A)
+        DifficultyTier.PRO -> Color(0xFFBF360C)
     }
+
+    /** Label colour on [color]: dark on the white badge, white on the rest. */
+    val onColor: Color get() = if (tier == DifficultyTier.WHITE) Color(0xFF1A1A1A) else Color.White
+
+    /** The white badge needs an outline to show on a light card. */
+    val outlined: Boolean get() = tier == DifficultyTier.WHITE
 
     /** Chip text with the sign shape, e.g. "■ S2 · Intermediate", "◆◆ S4 · Expert". */
     val badge: String get() = "${tier.symbol} S$scale · $label"
@@ -139,6 +150,21 @@ data class Trail(
      * both. Empty means none.
      */
     val horseTrailPaths: List<Boolean> = emptyList(),
+    /**
+     * Per entry of [paths]: that piece's own mtb:scale, so a loop whose sections are rated
+     * differently is drawn section by section. Null entries (and an empty list) fall back to
+     * [mtbScale], which is the hardest section's rating.
+     */
+    val mtbScalePaths: List<Int?> = emptyList(),
+    /**
+     * Per entry of [paths]: 1 when that piece is one-way in its drawn direction, -1 when
+     * one-way against it (OSM `oneway=-1`), 0 when two-way. Empty means all two-way.
+     */
+    val onewayPaths: List<Int> = emptyList(),
+    /** Who maintains it (OSM `operator`), e.g. "Kansas City Parks & Recreation". */
+    val operator: String? = null,
+    /** The trail's or its operator's page — http(s) only, since map data is open to edit. */
+    val website: String? = null,
     /** Mostly (by length) a horse trail — what the "Horse trails" filter and the list go by. */
     val horseTrail: Boolean = false,
 ) {

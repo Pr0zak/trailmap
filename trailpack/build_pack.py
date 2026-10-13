@@ -16,6 +16,9 @@ it with the code it already has:
     all/<x>_<y>.json       ALL mode: named paths/cycleways/tracks/bridleways + non-sidewalk footways
     mtb/<x>_<y>.json       MTB mode: named mtb:scale ways, designated dirt bike paths, route=mtb
     parks/<x>_<y>.json     named parks/reserves/protected areas, for naming MTB trail systems
+    amen/<x>_<y>.json      trail amenities, Overpass `out center` style: every trailhead, plus
+                           parking, toilets, drinking water, bike repair stands and shelters
+                           close to a trail (see AMENITY_NEAR_M); meta.json lists "amen" in kinds
     <kind>/wide.json       elements wider than a tile (long-distance routes, national forests)
 
 x = floor(lon / 0.25), y = floor(lat / 0.25). Each element is stored once (schema 2): in the tile
@@ -23,7 +26,8 @@ holding its centre if it is no wider than a tile, otherwise in <kind>/wide.json.
 tiles around a circle plus one ring, and the wide file, and de-duplicates by (type, id) across
 states, since Geofabrik's extracts overlap at the borders.
 
-The filters below must stay in step with buildQuery / buildMtbQuery / buildParkQuery in
+The filters below must stay in step with buildQuery / buildMtbQuery / buildParkQuery /
+buildAmenityQuery (and Amenities.kindOf) in
 mobile/app/src/main/java/com/trailmap/data/OverpassClient.kt. Bump PACK_SCHEMA (here and in the
 app's TrailPack.SCHEMA) whenever the layout or the filters change.
 
@@ -87,8 +91,35 @@ PARK_BOUNDARY = {"protected_area", "national_park"}
 # Only the tags the app reads. Everything else is dead weight on the phone.
 KEEP_TAGS = {
     "name", "highway", "surface", "tracktype", "footway", "foot", "bicycle", "horse",
-    "mtb:scale", "route", "leisure", "boundary", "access",
+    "mtb:scale", "route", "leisure", "boundary", "access", "oneway", "oneway:bicycle",
+    # Who maintains a trail, with a link; and what an amenity is, costs and when it is open.
+    "operator", "website", "contact:website", "url", "amenity", "fee", "opening_hours", "shelter_type",
 }
+
+# Amenities kept, and how close to a trail each must be (metres) to be worth showing: a city
+# holds thousands of car parks and bus-stop shelters, and only the ones at a trail are useful.
+# None = always kept (a trailhead is a trail amenity by definition). Mirrors the app's
+# buildAmenityQuery.
+AMENITY_NEAR_M = {
+    "trailhead": None,
+    "parking": 150,
+    "toilets": 300,
+    "drinking_water": 300,
+    "bicycle_repair_station": 300,
+    "shelter": 300,
+}
+NO_ACCESS = {"private", "no", "customers", "permit", "delivery"}
+
+
+def amenity_kind(t) -> str | None:
+    if t.get("highway") == "trailhead":
+        return "trailhead"
+    a = t.get("amenity")
+    if a not in AMENITY_NEAR_M or t.get("access") in NO_ACCESS:
+        return None
+    if a == "shelter" and t.get("shelter_type") == "public_transport":
+        return None
+    return a
 
 
 def is_all_way(t) -> bool:
@@ -150,6 +181,44 @@ def geom_json(pts, digits: int):
     return [{"lat": round(lat, digits), "lon": round(lon, digits)} for lat, lon in pts]
 
 
+class TrailGrid:
+    """
+    Trail lines sampled every ~50 m into a ~330 m grid, to answer "is a trail within N metres
+    of this point?" for every car park and toilet in a state without testing every segment.
+    """
+
+    CELL = 0.003
+    STEP = 0.0005
+
+    def __init__(self):
+        self.cells: dict[tuple[int, int], list[tuple[float, float]]] = defaultdict(list)
+
+    def _key(self, lat: float, lon: float) -> tuple[int, int]:
+        return math.floor(lat / self.CELL), math.floor(lon / self.CELL)
+
+    def add_line(self, pts):
+        for (a_lat, a_lon), (b_lat, b_lon) in zip(pts, pts[1:]):
+            n = max(1, math.ceil(max(abs(b_lat - a_lat), abs(b_lon - a_lon)) / self.STEP))
+            for i in range(n + 1):
+                lat = a_lat + (b_lat - a_lat) * i / n
+                lon = a_lon + (b_lon - a_lon) * i / n
+                self.cells[self._key(lat, lon)].append((lat, lon))
+
+    def within(self, lat: float, lon: float, metres: float) -> bool:
+        cy, cx = self._key(lat, lon)
+        reach = math.ceil(metres / 111_320 / self.CELL) + 1
+        cos_lat = math.cos(math.radians(lat))
+        m2 = metres * metres
+        for y in range(cy - reach, cy + reach + 1):
+            for x in range(cx - reach, cx + reach + 1):
+                for p_lat, p_lon in self.cells.get((y, x), ()):
+                    dy = (p_lat - lat) * 111_320
+                    dx = (p_lon - lon) * 111_320 * cos_lat
+                    if dx * dx + dy * dy <= m2:
+                        return True
+        return False
+
+
 # --- OSM passes ------------------------------------------------------------------------------
 
 def handlers():
@@ -190,11 +259,21 @@ def handlers():
             self.mtb = {}
             self.parks = {}
             self.geom = {}  # way id -> [(lat, lon)] for relation members
+            self.amen = {}  # ("node"|"way", id) -> (tags, kind, (lat, lon))
+
+        def node(self, n):
+            if not n.tags:
+                return
+            t = dict(n.tags)
+            kind = amenity_kind(t)
+            if kind and n.location.valid():
+                self.amen[("node", n.id)] = (t, kind, (n.location.lat, n.location.lon))
 
         def way(self, w):
             t = dict(w.tags)
+            kind = amenity_kind(t)
             flags = (is_all_way(t), is_mtb_way(t), is_park(t), w.id in self.needed)
-            if not any(flags):
+            if not any(flags) and not kind:
                 return
             try:
                 pts = [(n.lat, n.lon) for n in w.nodes]
@@ -210,6 +289,11 @@ def handlers():
                 self.parks[w.id] = (t, pts)
             if flags[3]:
                 self.geom[w.id] = pts
+            if kind:
+                # A car park drawn as an area: its centre, as Overpass's `out center` gives.
+                lat = sum(p[0] for p in pts) / len(pts)
+                lon = sum(p[1] for p in pts) / len(pts)
+                self.amen[("way", w.id)] = (t, kind, (lat, lon))
 
     return RelationPass, WayPass
 
@@ -277,6 +361,7 @@ def prefilter(pbf: str) -> str:
         [
             "osmium", "tags-filter", "--overwrite", "-o", out, pbf,
             "w/highway=path,cycleway,track,bridleway,footway", "w/mtb:scale", "r/route=mtb",
+            "nw/highway=trailhead", "nw/amenity=" + ",".join(k for k in AMENITY_NEAR_M if k != "trailhead"),
             "wr/leisure=park,nature_reserve,recreation_ground", "wr/boundary=protected_area,national_park",
         ],
         check=True,
@@ -308,11 +393,12 @@ def build(regions: list[str], workdir: str, out: str, index_entry: str | None = 
     os.makedirs(workdir, exist_ok=True)
     tiles: dict[str, dict[tuple[int, int], dict[tuple[str, int], dict]]] = {
         "all": defaultdict(dict), "mtb": defaultdict(dict), "parks": defaultdict(dict),
+        "amen": defaultdict(dict),
     }
     shapes = []
     stamps = []
 
-    wide: dict[str, dict[tuple[str, int], dict]] = {"all": {}, "mtb": {}, "parks": {}}
+    wide: dict[str, dict[tuple[str, int], dict]] = {"all": {}, "mtb": {}, "parks": {}, "amen": {}}
 
     def place(kind: str, el: dict, vertices):
         # Stored once. An element no wider than a tile goes in the tile holding its centre, so
@@ -343,7 +429,7 @@ def build(regions: list[str], workdir: str, out: str, index_entry: str | None = 
         ways.apply_file(src, locations=True, idx="flex_mem")
         print(
             f"{region}: {len(ways.all)} all-ways, {len(ways.mtb)} mtb-ways, {len(rels.mtb)} mtb-rels, "
-            f"{len(ways.parks)} park-ways, {len(rels.parks)} park-rels",
+            f"{len(ways.parks)} park-ways, {len(rels.parks)} park-rels, {len(ways.amen)} amenity candidates",
             flush=True,
         )
 
@@ -365,6 +451,29 @@ def build(regions: list[str], workdir: str, out: str, index_entry: str | None = 
                     verts += pts
             if mem:
                 place("mtb", {"type": "relation", "id": rid, "tags": tags(t), "members": mem}, verts)
+
+        # Amenities: trailheads always; the rest only when a trail passes close by.
+        near = TrailGrid()
+        for _, pts in ways.all.values():
+            near.add_line(pts)
+        for _, pts in ways.mtb.values():
+            near.add_line(pts)
+        for ref in {ref for _, members in rels.mtb.values() for ref, _ in members}:
+            if ref in ways.geom:
+                near.add_line(ways.geom[ref])
+        kept = 0
+        for (typ, oid), (t, kind, (lat, lon)) in ways.amen.items():
+            limit = AMENITY_NEAR_M[kind]
+            if limit is not None and not near.within(lat, lon, limit):
+                continue
+            el = {"type": typ, "id": oid, "tags": tags(t)}
+            if typ == "node":
+                el["lat"], el["lon"] = round(lat, 7), round(lon, 7)
+            else:
+                el["center"] = {"lat": round(lat, 7), "lon": round(lon, 7)}
+            place("amen", el, [(lat, lon)])
+            kept += 1
+        print(f"{region}: {kept} amenities kept near trails", flush=True)
 
         # Parks only answer "which park is this trail in?" — ~10 m of simplification and
         # 5 decimals (~1 m) cost nothing there and keep big forests from bloating every tile.
@@ -399,6 +508,9 @@ def build(regions: list[str], workdir: str, out: str, index_entry: str | None = 
     stamp = min((s for s in stamps if s), default=None)
     meta = {
         "schema": PACK_SCHEMA,
+        # Which tile kinds this pack holds. Packs without "amen" predate amenities, and the app
+        # asks Overpass for those instead of showing an area with none.
+        "kinds": sorted(k for k in tiles if tiles[k] or wide[k]),
         "tileDeg": TILE_DEG,
         "regions": regions,
         "built": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),

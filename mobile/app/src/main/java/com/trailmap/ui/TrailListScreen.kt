@@ -1,6 +1,7 @@
 package com.trailmap.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -352,21 +353,9 @@ internal fun SystemHeader(system: TrailSystem, ridden: Int? = null, condition: T
 @Composable
 internal fun ScaleRangeChip(scaleMin: Int?, scaleMax: Int?) {
     if (scaleMin == null || scaleMax == null) return
-    val color = MtbDifficulty.of(scaleMax)?.color ?: MaterialTheme.colorScheme.primary
+    val difficulty = MtbDifficulty.of(scaleMax) ?: return
     val label = if (scaleMin == scaleMax) "S$scaleMin" else "S$scaleMin–S$scaleMax"
-    Box(
-        Modifier
-            .clip(RoundedCornerShape(50))
-            .background(color)
-            .padding(horizontal = 10.dp, vertical = 3.dp),
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            color = Color.White,
-        )
-    }
+    DifficultyPill(difficulty, label)
 }
 
 /**
@@ -450,17 +439,25 @@ fun SurfaceBadge(surface: SurfaceType, modifier: Modifier = Modifier) {
 @Composable
 fun MtbBadge(scale: Int?, modifier: Modifier = Modifier) {
     val difficulty = MtbDifficulty.of(scale) ?: return
+    DifficultyPill(difficulty, difficulty.badge, modifier)
+}
+
+/** A pill in [difficulty]'s sign colour; the white one gets an outline to show on a light card. */
+@Composable
+private fun DifficultyPill(difficulty: MtbDifficulty, text: String, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(50)
     Box(
         modifier
-            .clip(RoundedCornerShape(50))
+            .clip(shape)
             .background(difficulty.color)
+            .then(if (difficulty.outlined) Modifier.border(1.dp, Color(0xFF555555), shape) else Modifier)
             .padding(horizontal = 10.dp, vertical = 3.dp),
     ) {
         Text(
-            difficulty.badge,
+            text,
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
-            color = Color.White,
+            color = difficulty.onColor,
         )
     }
 }

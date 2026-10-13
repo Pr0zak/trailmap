@@ -187,6 +187,19 @@ class OverpassClient(
             }
         }
 
+    /**
+     * Trailheads, and parking, toilets, water, bike repair stands and shelters near a trail,
+     * within [radiusMeters] of [center]. Best-effort: the caller shows none on failure.
+     */
+    suspend fun fetchAmenities(center: GeoPoint, radiusMeters: Int): List<Amenity> =
+        withContext(Dispatchers.IO) {
+            val e = elementsFor("amen", center, radiusMeters, false, buildAmenityQuery(center, radiusMeters))
+            e.elements.mapNotNull { el ->
+                val p = el.point() ?: return@mapNotNull null
+                Amenities.of(el.type, el.id, el.tags, GeoPoint(p.lat, p.lon))
+            }
+        }
+
     private fun parseResponse(raw: String): OverpassResponse =
         runCatching { json.decodeFromString<OverpassResponse>(raw) }
             .getOrElse { throw Exception("Overpass parse failed: ${it.message}", it) }
@@ -244,7 +257,9 @@ class OverpassClient(
         val t0 = System.currentTimeMillis()
         // Inside the regional pack, it is the answer — even for a forced refresh, since it is at
         // most a week old and the alternative is a public server that may take a minute or 504.
-        pack?.takeIf { it.covers(center) }?.let { return packElements(it, kind, center, radiusMeters, t0) }
+        // Amenities only from packs that have them: an older pack would answer "none here".
+        pack?.takeIf { it.covers(center) && (kind != "amen" || it.hasKind("amen")) }
+            ?.let { return packElements(it, kind, center, radiusMeters, t0) }
         // Work out which file would answer this before touching the disk, so a memo hit skips
         // the multi-megabyte read as well as the parse.
         val source = if (forceRefresh) null else coveringCache(kind, center, radiusMeters)
@@ -306,7 +321,8 @@ class OverpassClient(
             }
             for (el in elements) {
                 if ((el.type to el.id) in seen) continue
-                val inside = el.geometry.any(::near) || el.members.any { m -> m.geometry.any(::near) }
+                val inside = el.geometry.any(::near) || el.members.any { m -> m.geometry.any(::near) } ||
+                    el.point()?.let(::near) == true
                 if (inside && seen.add(el.type to el.id)) out.add(el)
             }
         }
@@ -550,6 +566,31 @@ class OverpassClient(
               relation["route"="mtb"](around:$r,$lat,$lon);
             );
             out geom;
+        """.trimIndent()
+    }
+
+    /**
+     * Amenities, filtered as trailpack/build_pack.py does (AMENITY_NEAR_M): every trailhead,
+     * and the other kinds only within reach of a trail — the ALL and MTB trail clauses are
+     * gathered into a set first and the amenities searched `around` it.
+     */
+    private fun buildAmenityQuery(center: GeoPoint, radiusMeters: Int): String {
+        val r = radiusMeters
+        val lat = center.lat
+        val lon = center.lon
+        return """
+            [out:json][timeout:45];
+            (
+              way["highway"~"^(path|cycleway|track|bridleway)$"]["name"](around:$r,$lat,$lon);
+              way["highway"="footway"]["footway"!~"sidewalk|crossing|traffic_island|access_aisle"]["name"](around:$r,$lat,$lon);
+              way["mtb:scale"]["name"](around:$r,$lat,$lon);
+            )->.t;
+            (
+              nwr["highway"="trailhead"](around:$r,$lat,$lon);
+              nwr["amenity"="parking"]["access"!~"^(private|no|customers|permit|delivery)$"](around.t:150);
+              nwr["amenity"~"^(toilets|drinking_water|bicycle_repair_station|shelter)$"]["access"!~"^(private|no|customers|permit|delivery)$"]["shelter_type"!="public_transport"](around.t:300);
+            );
+            out center tags;
         """.trimIndent()
     }
 
@@ -802,7 +843,15 @@ class OverpassClient(
         val tags: Map<String, String> = emptyMap(),
         val geometry: List<OverpassNode> = emptyList(),
         val members: List<OverpassMember> = emptyList(),
-    )
+        /** A node's position (`out center` / amenities). */
+        val lat: Double? = null,
+        val lon: Double? = null,
+        /** A way's or relation's centre (`out center` / amenities). */
+        val center: OverpassNode? = null,
+    ) {
+        /** Where a point-like element is: a node's own position, else its centre. */
+        fun point(): OverpassNode? = if (lat != null && lon != null) OverpassNode(lat, lon) else center
+    }
 
     @Serializable
     private data class OverpassMember(
@@ -877,6 +926,7 @@ class OverpassClient(
                     members = relMembers,
                     center = center,
                     mtbScale = null,
+                    ownTags = rel.tags,
                 )
             )
         }
@@ -940,38 +990,48 @@ class OverpassClient(
 
         val trails = ArrayList<Trail>()
 
+        // A relation's `out geom` members carry geometry but no tags. The ratings live on the
+        // member ways, which the way["mtb:scale"] clause returns as elements of their own.
+        val waysById = ways.associateBy { it.id }
+
         // --- Relations: one logical trail each (skip nameless) ---
         for (rel in relations) {
             val name = trailName(rel.tags["name"]) ?: continue
-            val memberPaths = rel.members
-                .filter { it.type == "way" }
-                .map { m -> m.geometry.map { GeoPoint(it.lat, it.lon) } }
-                .filter { it.size >= 2 }
-            if (memberPaths.isEmpty()) continue
-
             val relSurface = SurfaceType.fromOsmSurface(rel.tags["surface"])
                 .takeIf { it != SurfaceType.UNKNOWN } ?: SurfaceType.DIRT
             val relScale = parseMtbScale(rel.tags["mtb:scale"])
 
-            val relMembers = memberPaths.map { pts ->
+            // Each member keeps its own way's rating and surface when that way is in the
+            // response. Reading only the relation's tags left every KC route unrated: none of
+            // the 48 route=mtb relations there carries mtb:scale, while their ways mostly do
+            // (Wudchuk Run: one S1 way and eight S2), so they all drew in brown.
+            val relMembers = rel.members.filter { it.type == "way" }.mapNotNull { m ->
+                val pts = m.geometry.map { GeoPoint(it.lat, it.lon) }
+                if (pts.size < 2) return@mapNotNull null
+                val way = waysById[m.ref]
                 WaySegment(
-                    id = 0L,
-                    tags = emptyMap(),
+                    id = m.ref,
+                    tags = way?.tags.orEmpty(),
                     points = pts,
-                    surface = relSurface,
+                    surface = way?.let { segmentSurface(it.tags) }
+                        ?.takeIf { rel.tags["surface"] == null } ?: relSurface,
                     uses = setOf(UseType.BIKE, UseType.WALK),
                     length = Geo.lengthMeters(pts),
-                    mtbScale = relScale,
+                    mtbScale = parseMtbScale(way?.tags?.get("mtb:scale")) ?: relScale,
                 )
             }
+            if (relMembers.isEmpty()) continue
             trails.add(
                 assemble(
                     id = "rel_${rel.id}",
                     name = name,
                     members = relMembers,
                     center = center,
-                    mtbScale = relScale,
+                    // The relation's own rating when it has one, else its hardest section —
+                    // as a trail sign rates a trail by its hardest part.
+                    mtbScale = relScale ?: relMembers.mapNotNull { it.mtbScale }.maxOrNull(),
                     parks = parks,
+                    ownTags = rel.tags,
                 )
             )
         }
@@ -1036,6 +1096,8 @@ class OverpassClient(
         center: GeoPoint,
         mtbScale: Int? = members.mapNotNull { it.mtbScale }.maxOrNull(),
         parks: List<Park> = emptyList(),
+        /** The relation's own tags, which speak for the whole trail; empty for a way group. */
+        ownTags: Map<String, String> = emptyMap(),
     ): Trail {
         val paths = members.map { it.points }
         val horseTrailPieces = members.map { isHorseTrail(it.tags) }
@@ -1081,10 +1143,33 @@ class OverpassClient(
             mtbScale = mtbScale,
             parkName = parkName,
             horseTrailPaths = horseTrailPieces,
+            mtbScalePaths = if (members.any { it.mtbScale != null }) members.map { it.mtbScale } else emptyList(),
+            onewayPaths = members.map { onewayOf(it.tags) }.takeIf { o -> o.any { it != 0 } }.orEmpty(),
+            operator = ownTags["operator"]?.trim()?.takeIf { it.isNotEmpty() } ?: mostOf(members) { it.tags["operator"]?.trim()?.takeIf { v -> v.isNotEmpty() } },
+            website = Amenities.websiteOf(ownTags) ?: mostOf(members) { Amenities.websiteOf(it.tags) },
             horseTrail = members.withIndex().sumOf { (i, m) -> if (horseTrailPieces[i]) m.length else 0.0 } >= totalLength / 2 &&
                 horseTrailPieces.any { it },
         )
     }
+
+    /** The value [pick] gives for the most metres of [members], or null when none has one. */
+    private fun mostOf(members: List<WaySegment>, pick: (WaySegment) -> String?): String? {
+        val byValue = HashMap<String, Double>()
+        for (m in members) pick(m)?.let { byValue[it] = (byValue[it] ?: 0.0) + m.length }
+        return byValue.maxByOrNull { it.value }?.key
+    }
+
+    /**
+     * One-way direction for a bike: `oneway:bicycle` first (`oneway=yes` + `oneway:bicycle=no`
+     * is two-way on a bike), then `oneway`. 1 = along the way's drawn direction, -1 = against
+     * it, 0 = two-way. Downhill-only MTB lines are the usual case.
+     */
+    private fun onewayOf(tags: Map<String, String>): Int =
+        when ((tags["oneway:bicycle"] ?: tags["oneway"])?.trim()?.lowercase()) {
+            "yes", "true", "1" -> 1
+            "-1", "reverse" -> -1
+            else -> 0
+        }
 
     private fun segmentSurface(tags: Map<String, String>): SurfaceType {
         val fromSurface = SurfaceType.fromOsmSurface(tags["surface"])
