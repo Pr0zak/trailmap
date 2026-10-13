@@ -14,6 +14,7 @@ class TrailColorExprTest {
         Expression.literal("BLACK"), Expression.color((if (dark) 0xFF000000 else 0xFF111111).toInt()),
         Expression.literal("DOUBLE_BLACK"), Expression.color((if (dark) 0xFF000000 else 0xFF111111).toInt()),
         Expression.literal("PRO"), Expression.color((if (dark) 0xFFFF9800 else 0xFFF57C00).toInt()),
+        Expression.literal("UNRATED"), Expression.color((if (dark) 0xFF9E9E9E else 0xFF8A8A8A).toInt()),
         surface,
     )
 

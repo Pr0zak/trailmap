@@ -121,6 +121,12 @@ sealed interface RecordedTrails {
 /** Basemap theme: follow the system, or force light/dark independent of it. */
 enum class MapTheme { SYSTEM, LIGHT, DARK }
 
+/**
+ * What the map's trail lines are coloured by, in both modes. Difficulty: rated pieces in their
+ * sign colour, unrated ones grey. Surface: paved / gravel / dirt, horse trails purple.
+ */
+enum class ColorBy(val label: String) { DIFFICULTY("Difficulty"), SURFACE("Surface") }
+
 /** A one-shot camera move request: where to go, and at what zoom (null = keep current). */
 data class CameraTarget(val point: GeoPoint, val zoom: Double? = null)
 
@@ -149,6 +155,7 @@ data class TrailsUiState(
     val showSavedOnly: Boolean = false,
     val sort: TrailSort = TrailSort.DISTANCE,
     val mapTheme: MapTheme = MapTheme.SYSTEM,
+    val colorBy: ColorBy = ColorBy.DIFFICULTY,
     /** When set, the map recenters here (e.g. tapping a trail-system header); consume after use. */
     val focusTarget: CameraTarget? = null,
     /** The trail the user tapped on the map (peek card + highlight); null = nothing selected. */
@@ -237,6 +244,14 @@ data class TrailsUiState(
     val showAmenities: Boolean = true,
     /** An amenity tapped on the map. */
     val selectedAmenityId: String? = null,
+    /**
+     * MTB mode: the other trails around (greenways, paths), drawn thin and grey under the MTB
+     * lines so the map isn't empty between systems. Empty in ALL mode.
+     */
+    val contextTrails: List<Trail> = emptyList(),
+    val contextVersion: Int = 0,
+    /** MTB mode: draw gravel trails among [contextTrails] in gravel gold, not grey (persisted). */
+    val mtbGravel: Boolean = true,
 ) {
     /** [recorded] by id. */
     val recordedById: Map<String, RecordedTrack> by lazy { recorded.associateBy { it.id } }
@@ -368,12 +383,14 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
             radiusMeters = DEFAULT_ALL_RADIUS,
             savedIds = prefs.savedIds(),
             mapTheme = runCatching { MapTheme.valueOf(prefs.mapTheme()) }.getOrDefault(MapTheme.SYSTEM),
+            colorBy = runCatching { ColorBy.valueOf(prefs.colorBy()) }.getOrDefault(ColorBy.DIFFICULTY),
             rides = prefs.rides(),
             autoLoadOnPan = prefs.autoLoadOnPan(),
             showRidden = prefs.layer(YouLayer.RIDDEN.name, YouLayer.RIDDEN.default),
             showTracks = prefs.layer(YouLayer.TRACKS.name, YouLayer.TRACKS.default),
             showConditions = prefs.layer(YouLayer.CONDITIONS.name, YouLayer.CONDITIONS.default),
             showAmenities = prefs.layer(AMENITIES_LAYER, true),
+            mtbGravel = prefs.layer(MTB_GRAVEL_LAYER, true),
         ),
     )
     val state: StateFlow<TrailsUiState> = _state.asStateFlow()
@@ -507,6 +524,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
      */
     private val amenityAreas = LinkedHashMap<String, List<Amenity>>(16, 0.75f, true)
 
+    /** ALL-mode circles fetched only as MTB mode's grey context, most recently used last. */
+    private val contextAreas = LinkedHashMap<String, List<Trail>>(8, 0.75f, true)
+
     private class LoadedArea(
         val center: GeoPoint,
         val radius: Int,
@@ -528,7 +548,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         private set
 
     fun trailById(id: String): Trail? =
-        _state.value.trails.firstOrNull { it.id == id } ?: synchronized(auxTrails) { auxTrails[id] }
+        _state.value.trails.firstOrNull { it.id == id }
+            ?: _state.value.contextTrails.firstOrNull { it.id == id }
+            ?: synchronized(auxTrails) { auxTrails[id] }
 
     fun hasLocationPermission(): Boolean = locator.hasPermission()
 
@@ -689,13 +711,14 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                         viewportStale = false,
                         servingStale = overpass.lastServedStale,
                         // Keep the peek card open only if the tapped trail survived the reload.
-                        selectedTrailId = s.selectedTrailId?.takeIf { id -> trails.any { it.id == id } },
+                        selectedTrailId = s.selectedTrailId?.takeIf { id -> trails.any { it.id == id } || s.contextTrails.any { it.id == id } },
                     )
                 }
 
                 // Amenities for the circle just served: instant from a pack, cached for a week
                 // from Overpass. Same job, so a newer load cancels it.
                 loadAmenities(result.servedCenter, result.servedRadius, seq)
+                if (mtb) loadContext(center, seq)
 
                 // MTB: the trails are up; now fetch the park polygons that name the systems.
                 // Same job, so a newer load cancels this too. The trail elements are memoized,
@@ -757,8 +780,46 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * MTB mode's grey background trails: the ALL-mode trails around [center], but only from
+     * data already on the phone (a pack or the cache). A second Overpass query on every MTB
+     * pan is exactly the traffic that earns a per-IP block, and these are only context.
+     */
+    private suspend fun loadContext(center: GeoPoint, seq: Int) {
+        if (overpass.isWarm(center, MIN_FETCH_RADIUS, mtb = false)) {
+            val got = runCatching {
+                withTimeoutOrNull(CONTEXT_BUDGET_MS) { overpass.fetchTrails(center, MIN_FETCH_RADIUS, mtb = false) }
+            }.getOrElse { if (it is CancellationException) throw it else null }
+            if (got != null && seq == loadSeq) {
+                contextAreas["${got.servedCenter.lat},${got.servedCenter.lon},${got.servedRadius}"] = got.trails
+                while (contextAreas.size > MAX_CONTEXT_AREAS) contextAreas.remove(contextAreas.keys.first())
+            }
+        }
+        if (seq != loadSeq || _state.value.mode != MapMode.MTB) return
+        val context = withContext(Dispatchers.Default) { contextFor(_state.value.trails) }
+        _state.update { it.copy(contextTrails = context, contextVersion = it.contextVersion + 1) }
+    }
+
+    /** ALL-mode trails held anywhere, minus those already drawn as MTB trails (by id or name). */
+    private fun contextFor(mtbTrails: List<Trail>): List<Trail> {
+        val ids = mtbTrails.mapTo(HashSet()) { it.id }
+        val names = mtbTrails.mapTo(HashSet()) { it.name }
+        val byId = LinkedHashMap<String, Trail>()
+        for (t in unionFor(false) + contextAreas.values.flatten()) {
+            if (t.id in ids || t.name in names) continue
+            val held = byId[t.id]
+            if (held == null || t.lengthMeters > held.lengthMeters) byId[t.id] = t
+        }
+        return byId.values.toList()
+    }
+
     /** Amenities close to [trail], for its detail page. */
     fun amenitiesNear(trail: Trail): List<Amenity> = Amenities.near(trail, _state.value.amenities)
+
+    fun setMtbGravel(on: Boolean) {
+        prefs.setLayer(MTB_GRAVEL_LAYER, on)
+        _state.update { it.copy(mtbGravel = on) }
+    }
 
     fun setShowAmenities(on: Boolean) {
         prefs.setLayer(AMENITIES_LAYER, on)
@@ -802,6 +863,8 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 selectedTrailId = null,
                 trails = carried,
                 trailsVersion = it.trailsVersion + 1,
+                contextTrails = if (mode == MapMode.MTB) contextFor(carried) else emptyList(),
+                contextVersion = it.contextVersion + 1,
             )
         }
         load(_state.value.center, initialFetchRadius())
@@ -1324,6 +1387,11 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     fun setShowSavedOnly(on: Boolean) = _state.update { it.copy(showSavedOnly = on) }
 
     /** Pick the app + basemap theme (persisted): follow the system, or force light/dark. */
+    fun setColorBy(colorBy: ColorBy) = _state.update {
+        prefs.setColorBy(colorBy.name)
+        it.copy(colorBy = colorBy)
+    }
+
     fun setMapTheme(theme: MapTheme) = _state.update {
         prefs.setMapTheme(theme.name)
         it.copy(mapTheme = theme)
@@ -2007,8 +2075,15 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
         /** How long the follow-up park query may take before systems keep their fallback names. */
         private const val PARKS_BUDGET_MS = 60_000L
 
+        /** Context trails come from the phone only; this is a guard, not an expected wait. */
+        private const val CONTEXT_BUDGET_MS = 10_000L
+        private const val MAX_CONTEXT_AREAS = 4
+
         /** Amenities are extras: give up on them well before the user would notice a wait. */
         private const val AMENITIES_BUDGET_MS = 30_000L
+
+        /** Prefs key for the Layers menu's "Gravel trails in MTB mode" switch. */
+        private const val MTB_GRAVEL_LAYER = "MTB_GRAVEL"
 
         /** Prefs key for the Layers menu's Amenities switch. */
         private const val AMENITIES_LAYER = "AMENITIES"

@@ -22,6 +22,13 @@ class Prefs(context: Context) {
         sp.edit().putString(KEY_MAP_THEME, value).apply()
     }
 
+    /** One of "DIFFICULTY" | "SURFACE": what the map's trail lines are coloured by. */
+    fun colorBy(): String = sp.getString(KEY_COLOR_BY, "DIFFICULTY") ?: "DIFFICULTY"
+
+    fun setColorBy(value: String) {
+        sp.edit().putString(KEY_COLOR_BY, value).apply()
+    }
+
     /** Refetch trails automatically as the map is panned. Defaults on. */
     fun autoLoadOnPan(): Boolean = sp.getBoolean(KEY_AUTO_LOAD, true)
 
@@ -55,6 +62,7 @@ class Prefs(context: Context) {
     private companion object {
         const val KEY_SAVED = "saved_trail_ids"
         const val KEY_MAP_THEME = "map_theme"
+        private const val KEY_COLOR_BY = "color_by"
         const val KEY_AUTO_LOAD = "auto_load_on_pan"
         const val KEY_ENDPOINT = "preferred_endpoint"
         const val KEY_RIDES = "rides"

@@ -119,6 +119,12 @@ private const val LAYER_TRACK_HL = "track-highlight-line"
 private const val LAYER_TRACK_HL_CASING = "track-highlight-casing"
 private const val SRC_CONDITIONS = "conditions"
 private const val SRC_AMENITIES = "amenities"
+private const val SRC_CONTEXT = "context-trails"
+private const val LAYER_CONTEXT = "context-trails-line"
+private const val LAYER_CONTEXT_GRAVEL = "context-trails-gravel"
+
+/** MTB mode's other trails, as (light, dark): a light grey under the rated lines. */
+private val CONTEXT_LINE_COLOR = 0xCC9E9E9E to 0xCC8A8A8A
 private const val LAYER_AMENITIES = "amenities-icon"
 private const val LAYER_AMENITY_PARKING = "amenities-parking"
 private const val LAYER_CONDITIONS = "conditions-dot"
@@ -219,14 +225,15 @@ fun MapScreen(
     // short String) rather than ui.filtered, so a camera idle doesn't drag Compose through a
     // structural comparison of every trail's geometry. The GeoJSON is built on a background
     // dispatcher — a Kansas City pull is ~30k coordinates and would jank the frame here.
-    LaunchedEffect(ui.filterKey, styleRef.value) {
+    LaunchedEffect(ui.filterKey, ui.colorBy, styleRef.value) {
         val style = styleRef.value ?: return@LaunchedEffect
         val t0 = android.os.SystemClock.elapsedRealtime()
-        // Horse trails get their own color in ALL mode only; MTB colors mean difficulty.
-        // Levels colour the lines in MTB mode only: in ALL mode the lines key surface, and
-        // "easy" green beside "paved" green would make that legend ambiguous.
+        // Horse trails get their own color when colouring by surface, in ALL mode only.
+        // One colour key at a time (the Layers menu's "Colour trails by"): mixing levels with
+        // surfaces put "easy" green beside "paved" green.
+        val byLevel = ui.colorBy == ColorBy.DIFFICULTY
         val fc = withContext(Dispatchers.Default) {
-            trailsFc(ui.filtered, horse = ui.mode == MapMode.ALL, levels = ui.mode == MapMode.MTB)
+            trailsFc(ui.filtered, horse = !byLevel && ui.mode == MapMode.ALL, levels = byLevel)
         }
         if (styleRef.value !== style) return@LaunchedEffect // theme flipped mid-build
         style.getSourceAs<GeoJsonSource>(SRC_TRAILS)?.setGeoJson(fc)
@@ -240,7 +247,8 @@ fun MapScreen(
         val rideIds = ui.highlightedRideId
             ?.let { rid -> ui.rides.firstOrNull { it.id == rid } }
             ?.trails?.map { it.id }?.toSet().orEmpty()
-        val lit = ui.trails.filter { it.id == ui.selectedTrailId || it.id in rideIds }
+        val lit = ui.trails.filter { it.id == ui.selectedTrailId || it.id in rideIds } +
+            ui.contextTrails.filter { it.id == ui.selectedTrailId }
         val fc = if (lit.isNotEmpty()) trailsFc(lit) else EMPTY_FC
         style.getSourceAs<GeoJsonSource>(SRC_HIGHLIGHT)?.setGeoJson(fc)
     }
@@ -271,6 +279,21 @@ fun MapScreen(
         val track = ui.highlightedTrackId?.let { ui.recordedById[it] }
         val fc = if (track == null) EMPTY_FC else withContext(Dispatchers.Default) { pathsFc(listOf(Polyline.decode(track.polyline))) }
         style.getSourceAs<GeoJsonSource>(SRC_TRACK_HL)?.setGeoJson(fc)
+    }
+
+    // MTB mode's other trails, grey (gravel in gold when that switch is on), under the MTB lines.
+    LaunchedEffect(ui.mtbGravel, styleRef.value) {
+        val style = styleRef.value ?: return@LaunchedEffect
+        style.getLayer(LAYER_CONTEXT_GRAVEL)?.setProperties(
+            PropertyFactory.visibility(if (ui.mtbGravel) Property.VISIBLE else Property.NONE),
+        )
+    }
+    LaunchedEffect(ui.contextVersion, ui.mode, styleRef.value) {
+        val style = styleRef.value ?: return@LaunchedEffect
+        val fc = if (ui.mode != MapMode.MTB || ui.contextTrails.isEmpty()) EMPTY_FC
+        else withContext(Dispatchers.Default) { trailsFc(ui.contextTrails) }
+        if (styleRef.value !== style) return@LaunchedEffect
+        style.getSourceAs<GeoJsonSource>(SRC_CONTEXT)?.setGeoJson(fc)
     }
 
     // Trail amenities, when the layer is on.
@@ -358,6 +381,7 @@ fun MapScreen(
                                 return@addOnMapClickListener true
                             }
                             val f = map.queryRenderedFeatures(box, LAYER_TRAILS).firstOrNull()
+                                ?: map.queryRenderedFeatures(box, LAYER_CONTEXT_GRAVEL, LAYER_CONTEXT).firstOrNull()
                             val id = f?.takeIf { it.hasProperty("id") }?.getStringProperty("id")
                             if (id != null) {
                                 vm.selectTrail(id) // highlight + show the peek card
@@ -398,6 +422,8 @@ fun MapScreen(
             selectedCondition = ui.selectedConditionId?.let { id -> ui.conditions.firstOrNull { it.id == id } },
             selectedAmenity = ui.selectedAmenityId?.let { id -> ui.amenities.firstOrNull { it.id == id } },
             onSetAmenities = vm::setShowAmenities,
+            onSetColorBy = vm::setColorBy,
+            onSetMtbGravel = vm::setMtbGravel,
             onSetLayer = vm::setLayer,
             onOpenMyVitals = onOpenMyVitals,
             onClearTrack = vm::clearTrackHighlight,
@@ -430,6 +456,8 @@ internal fun BoxScope.MapOverlays(
     selectedCondition: TrailStatus? = null,
     selectedAmenity: Amenity? = null,
     onSetAmenities: (Boolean) -> Unit = {},
+    onSetColorBy: (ColorBy) -> Unit = {},
+    onSetMtbGravel: (Boolean) -> Unit = {},
     onSetLayer: (YouLayer, Boolean) -> Unit = { _, _ -> },
     onOpenMyVitals: () -> Unit = {},
     onClearTrack: () -> Unit = {},
@@ -590,12 +618,13 @@ internal fun BoxScope.MapOverlays(
             ) {
                 // color key — difficulty (MTB) or surface (ALL)
                 MapLegend(
-                    mode = ui.mode, dark = dark,
+                    colorBy = ui.colorBy, dark = dark,
+                    mtbContext = if (ui.mode == MapMode.MTB) (if (ui.mtbGravel) MtbContext.GRAVEL else MtbContext.GREY) else null,
                     ridden = ui.showRidden && ui.visits.isNotEmpty(),
                     tracks = ui.showTracks && ui.recorded.isNotEmpty(),
                 )
                 Spacer(Modifier.weight(1f))
-                MapButtons(ui, onSetTheme, onOpenOffline, onRecenter, onSetLayer, onOpenMyVitals, onSetAmenities)
+                MapButtons(ui, onSetTheme, onOpenOffline, onRecenter, onSetLayer, onOpenMyVitals, onSetAmenities, onSetColorBy, onSetMtbGravel)
             }
             // peek card — only for the trail the user tapped (nothing auto-selected at startup)
             if (selectedTrail != null) {
@@ -645,6 +674,8 @@ private fun MapButtons(
     onSetLayer: (YouLayer, Boolean) -> Unit,
     onOpenMyVitals: () -> Unit,
     onSetAmenities: (Boolean) -> Unit = {},
+    onSetColorBy: (ColorBy) -> Unit = {},
+    onSetMtbGravel: (Boolean) -> Unit = {},
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -683,6 +714,25 @@ private fun MapButtons(
                         },
                     )
                 }
+                androidx.compose.material3.HorizontalDivider()
+                Text(
+                    "Colour trails by",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+                ColorBy.entries.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option.label) },
+                        leadingIcon = { RadioButton(selected = ui.colorBy == option, onClick = null) },
+                        onClick = { onSetColorBy(option) },
+                    )
+                }
+                DropdownMenuItem(
+                    text = { Text("Gravel trails in MTB mode") },
+                    leadingIcon = { androidx.compose.material3.Checkbox(checked = ui.mtbGravel, onCheckedChange = null) },
+                    onClick = { onSetMtbGravel(!ui.mtbGravel) },
+                )
                 androidx.compose.material3.HorizontalDivider()
                 DropdownMenuItem(
                     text = { Text("Amenities") },
@@ -764,13 +814,15 @@ private fun StatusPill(text: String) {
 }
 
 /**
- * Map color key: surface colors in ALL mode, the six trail-sign difficulty colours in MTB mode.
+ * Map color key: the six trail-sign difficulty colours plus "Unrated", or the surface colours —
+ * whichever the Layers menu's "Colour trails by" picks.
  * The swatches are the line colors [trailColorExpr] draws — not the badge fills, which are
  * darker so their white labels stay readable.
  */
 @Composable
 private fun MapLegend(
-    mode: MapMode,
+    colorBy: ColorBy,
+    mtbContext: MtbContext? = null,
     dark: Boolean,
     modifier: Modifier = Modifier,
     ridden: Boolean = false,
@@ -783,7 +835,7 @@ private fun MapLegend(
         shadowElevation = 2.dp,
     ) {
         Column {
-            LegendColors(mode, dark)
+            LegendColors(colorBy, dark, mtbContext)
             // Your layers get a second line, so the colour key above keeps its width.
             if (ridden || tracks) {
                 Row(
@@ -816,8 +868,8 @@ private fun MapLegend(
 }
 
 @Composable
-private fun LegendColors(mode: MapMode, dark: Boolean) {
-    if (mode == MapMode.MTB) {
+private fun LegendColors(colorBy: ColorBy, dark: Boolean, mtbContext: MtbContext? = null) {
+    if (colorBy == ColorBy.DIFFICULTY) {
         // Six levels in three rows of two, easiest first: a row of three crowded the map buttons.
         Column(
             Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -833,6 +885,18 @@ private fun LegendColors(mode: MapMode, dark: Boolean) {
                             Text("${tier.symbol} ${tier.label}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
                         }
                     }
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Swatch(Color((if (dark) UNRATED_LINE_COLOR.second else UNRATED_LINE_COLOR.first).toInt()), 22)
+                Spacer(Modifier.size(4.dp))
+                Text("Unrated", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+                // MTB mode's background trails share the row.
+                if (mtbContext == MtbContext.GRAVEL) {
+                    Spacer(Modifier.size(12.dp))
+                    Swatch(Color(SURFACE_LINE_COLORS[1].second.let { if (dark) it.second else it.first }.toInt()), 22)
+                    Spacer(Modifier.size(4.dp))
+                    Text("Gravel", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
                 }
             }
         }
@@ -891,6 +955,15 @@ private val TIER_LINE_COLORS = mapOf(
     DifficultyTier.PRO to (0xFFF57C00 to 0xFFFF9800),
 )
 
+
+/** What MTB mode's legend adds for its background trails. */
+private enum class MtbContext { GREY, GRAVEL }
+
+/** "lvl" for a piece with no rating while lines are coloured by difficulty. */
+private const val UNRATED = "UNRATED"
+
+/** Unrated trails while colouring by difficulty, as (light, dark): a neutral grey no level uses. */
+private val UNRATED_LINE_COLOR = 0xFF8A8A8A to 0xFF9E9E9E
 
 /** Surface line colors as (light, dark). Shared by the lines and legend. */
 private val SURFACE_LINE_COLORS = listOf(
@@ -1107,6 +1180,7 @@ private fun applyTrailLayers(style: Style, dark: Boolean) {
     style.addSource(GeoJsonSource(SRC_TRACK_HL, EMPTY_FC))
     style.addSource(GeoJsonSource(SRC_CONDITIONS, EMPTY_FC))
     style.addSource(GeoJsonSource(SRC_AMENITIES, EMPTY_FC))
+    style.addSource(GeoJsonSource(SRC_CONTEXT, EMPTY_FC))
     // Every recorded track, thin and under everything: where you've been, trail or not.
     style.addLayer(
         LineLayer(LAYER_TRACKS, SRC_TRACKS).withProperties(
@@ -1142,6 +1216,26 @@ private fun applyTrailLayers(style: Style, dark: Boolean) {
             PropertyFactory.lineColor(you),
             PropertyFactory.lineOpacity(if (dark) 0.5f else 0.42f),
         ),
+    )
+    // MTB mode's other trails: thin and grey, under everything rated, so the map shows the
+    // greenways and paths between systems without competing with the difficulty colours.
+    style.addLayer(
+        LineLayer(LAYER_CONTEXT, SRC_CONTEXT).withProperties(
+            PropertyFactory.lineWidth(lineWidthExpr(-0.3f)),
+            PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+            PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
+            PropertyFactory.lineColor((if (dark) CONTEXT_LINE_COLOR.second else CONTEXT_LINE_COLOR.first).toInt()),
+        ),
+    )
+    // …and, when "Gravel trails in MTB mode" is on, the gravel ones in gravel gold, full width.
+    style.addLayer(
+        LineLayer(LAYER_CONTEXT_GRAVEL, SRC_CONTEXT).withProperties(
+            PropertyFactory.lineWidth(lineWidthExpr()),
+            PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+            PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
+            PropertyFactory.lineColor(SURFACE_LINE_COLORS[1].second.let { if (dark) it.second else it.first }.toInt()),
+            PropertyFactory.visibility(Property.NONE),
+        ).withFilter(Expression.eq(Expression.get("surface"), Expression.literal(SurfaceType.GRAVEL.name))),
     )
     // Casing = a wider line drawn underneath the colored line. A dark outline on the light
     // basemap and a light halo on the dark basemap make the colored lines pop on either.
@@ -1394,6 +1488,7 @@ internal fun trailColorExpr(dark: Boolean): Expression {
     return Expression.match(
         Expression.get("lvl"),
         *stops.toTypedArray(),
+        Expression.literal(UNRATED), Expression.color((if (dark) UNRATED_LINE_COLOR.second else UNRATED_LINE_COLOR.first).toInt()),
         surfaceColorExpr(dark), // default: unrated trails → surface color
     )
 }
@@ -1463,7 +1558,7 @@ private fun trailsFc(trails: List<Trail>, horse: Boolean = false, levels: Boolea
     for (trail in trails) {
         for ((index, path) in trail.paths.withIndex()) {
             // Per piece: a loop's sections can be rated differently.
-            val lvl = if (!levels) "none" else (trail.levelPaths.getOrNull(index) ?: trail.level)?.name ?: "none"
+            val lvl = if (!levels) "none" else (trail.levelPaths.getOrNull(index) ?: trail.level)?.name ?: UNRATED
             if (path.size < 2) continue
             if (!first) sb.append(',')
             first = false
