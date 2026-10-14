@@ -1,31 +1,26 @@
 <!--
-  Launcher icon foreground: the trail-sign difficulty shapes — green circle, blue square, black
-  diamond — over a dirt trail, on the cream background (@color/ic_launcher_background). The same
-  colours as the app's difficulty badges. All artwork sits inside the 66dp adaptive-icon safe
-  zone (centre 54,54, r 33).
+  Launcher icon foreground: a folded paper map with a trail drawn across it in the difficulty
+  colours (green, then blue, then black) to a gold pin, on forest green
+  (@color/ic_launcher_background). Concept "J2 · Level route" in design/icon-concepts/.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- easy: green circle -->
-    <path
-        android:fillColor="#2E7D32"
-        android:pathData="M33,50m-9,0a9,9 0 1,0 18,0a9,9 0 1,0 -18,0" />
-    <!-- intermediate: blue square -->
-    <path
-        android:fillColor="#1565C0"
-        android:pathData="M46,42h16v16h-16z" />
-    <!-- advanced: black diamond -->
-    <path
-        android:fillColor="#1A1A1A"
-        android:pathData="M75,39 L86,50 L75,61 L64,50 Z" />
-    <!-- the trail -->
-    <path
-        android:strokeColor="#A0522D"
-        android:strokeWidth="3.4"
-        android:strokeLineCap="round"
-        android:fillColor="#00000000"
-        android:pathData="M26,73 C38,66 46,80 58,72 S76,66 84,72" />
+    <!-- the map's three folded panels -->
+    <path android:fillColor="#F4EFE3" android:pathData="M26,34 L43,28 L43,80 L26,86 Z" />
+    <path android:fillColor="#E2D7BE" android:pathData="M43,28 L65,34 L65,86 L43,80 Z" />
+    <path android:fillColor="#F4EFE3" android:pathData="M65,34 L82,28 L82,80 L65,86 Z" />
+    <!-- the trail: easy, intermediate, advanced -->
+    <path android:strokeColor="#2E7D32" android:strokeWidth="3.4" android:strokeLineCap="round"
+        android:fillColor="#00000000" android:pathData="M31,74 C34,69 38,69 42,70" />
+    <path android:strokeColor="#1565C0" android:strokeWidth="3.4" android:strokeLineCap="round"
+        android:fillColor="#00000000" android:pathData="M42,70 C47,71 50,66 54,62" />
+    <path android:strokeColor="#1A1A1A" android:strokeWidth="3.4" android:strokeLineCap="round"
+        android:fillColor="#00000000" android:pathData="M54,62 C60,56 68,52 74,48" />
+    <!-- the pin -->
+    <path android:fillColor="#F2C744"
+        android:pathData="M74,30 C69,30 66,33.5 66,37.5 C66,43 74,50 74,50 C74,50 82,43 82,37.5 C82,33.5 79,30 74,30 Z" />
+    <path android:fillColor="#1B3A27" android:pathData="M74,37m-3,0a3,3 0 1,0 6,0a3,3 0 1,0 -6,0" />
 </vector>

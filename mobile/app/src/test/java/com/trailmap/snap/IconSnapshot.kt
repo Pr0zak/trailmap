@@ -32,7 +32,7 @@ class IconSnapshot {
     @Composable
     private fun Icon(shape: Shape, sizeDp: Int, themed: Boolean = false) {
         // An adaptive icon is a 108dp canvas; launchers show the middle 72dp.
-        val bg = if (themed) Color(0xFFDCEBDD) else Color(0xFFF4EFE3)
+        val bg = if (themed) Color(0xFFDCEBDD) else Color(0xFF1B3A27)
         Box(Modifier.size(sizeDp.dp).clip(shape).background(bg), contentAlignment = androidx.compose.ui.Alignment.Center) {
             Image(
                 painterResource(if (themed) R.drawable.ic_launcher_monochrome else R.drawable.ic_launcher_foreground),
