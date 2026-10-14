@@ -99,6 +99,15 @@ class ScreenSnapshots {
         )
     }
 
+    @Test fun detail_user_level() = shot {
+        val t = Samples.trails[0]
+        TrailDetailContent(
+            trail = com.trailmap.data.UserLevels.apply(t, mapOf(t.id to com.trailmap.data.UserLevels.of(t, com.trailmap.data.DifficultyTier.BLUE))),
+            profile = Samples.profile, ui = Samples.ui,
+            onBack = {}, onToggleSaved = {}, onCreateRide = { _, _ -> }, onAddToRide = { _, _ -> },
+        )
+    }
+
     @Test fun rides() = shot { RidesContent(Samples.rides, onOpenRide = {}, onCreateRide = { "" }) }
     @Test fun rides_suggested() = shot {
         val t = Samples.trails

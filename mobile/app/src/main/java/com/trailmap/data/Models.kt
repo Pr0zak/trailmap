@@ -177,6 +177,14 @@ data class Trail(
     val website: String? = null,
     /** Mostly (by length) a horse trail — what the "Horse trails" filter and the list go by. */
     val horseTrail: Boolean = false,
+    /**
+     * The level you set yourself ([UserLevels]), which then fills [level] and every entry of
+     * [levelPaths]. Null when the trail shows the map's own rating.
+     */
+    val userLevel: DifficultyTier? = null,
+    /** While [userLevel] is set: the map's own [level] and [levelPaths], to restore on clear. */
+    val mapLevel: DifficultyTier? = null,
+    val mapLevelPaths: List<DifficultyTier?> = emptyList(),
 ) {
     val lengthMiles: Double get() = lengthMeters / 1609.344
     val distanceMiles: Double get() = distanceMeters / 1609.344

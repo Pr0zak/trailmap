@@ -52,6 +52,16 @@ class Prefs(context: Context) {
         sp.edit().putString(KEY_RIDES, json.encodeToString(rides)).apply()
     }
 
+    /** Levels you set on trails, by trail id ([UserLevels]). */
+    fun userLevels(): Map<String, UserLevel> =
+        sp.getString(KEY_USER_LEVELS, null)?.let { raw ->
+            runCatching { json.decodeFromString<Map<String, UserLevel>>(raw) }.getOrDefault(emptyMap())
+        } ?: emptyMap()
+
+    fun setUserLevels(levels: Map<String, UserLevel>) {
+        sp.edit().putString(KEY_USER_LEVELS, json.encodeToString(levels)).apply()
+    }
+
     /** Map layers drawn from your myvitals activity. Conditions default on; ridden trails and tracks off. */
     fun layer(name: String, default: Boolean): Boolean = sp.getBoolean("layer_$name", default)
 
@@ -66,5 +76,6 @@ class Prefs(context: Context) {
         const val KEY_AUTO_LOAD = "auto_load_on_pan"
         const val KEY_ENDPOINT = "preferred_endpoint"
         const val KEY_RIDES = "rides"
+        const val KEY_USER_LEVELS = "user_levels"
     }
 }

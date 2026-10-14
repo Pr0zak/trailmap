@@ -88,6 +88,7 @@ import com.trailmap.data.TrailConditions
 import com.trailmap.data.TrailRoute
 import com.trailmap.data.TrailStatus
 import com.trailmap.data.TrailVisits
+import com.trailmap.data.DifficultyTier
 import com.trailmap.data.UseType
 import kotlin.math.roundToInt
 
@@ -118,6 +119,7 @@ fun TrailDetailScreen(
         onToggleSaved = vm::toggleSaved,
         onCreateRide = { name, t -> vm.createRide(name, seed = t) },
         onAddToRide = { rideId, t -> vm.addTrailToRide(rideId, t) },
+        onSetLevel = vm::setUserLevel,
         onShowOnMap = { t ->
             vm.selectTrail(t.id)
             vm.focusOn(t.center, TRAIL_FOCUS_ZOOM)
@@ -138,6 +140,7 @@ internal fun TrailDetailContent(
     onCreateRide: (String, Trail) -> Unit,
     onAddToRide: (String, Trail) -> Unit,
     onShowOnMap: (Trail) -> Unit = {},
+    onSetLevel: (Trail, DifficultyTier?) -> Unit = { _, _ -> },
     chartScrub: Float? = null,
     visits: TrailVisits? = null,
     onOpenRecorded: (String) -> Unit = {},
@@ -266,6 +269,11 @@ internal fun TrailDetailContent(
                     )
                 }
 
+                // The map's rating, or yours: many trails carry none (Smithville Lake).
+                if (trail.userLevel != null || trail.level != null || UseType.BIKE in trail.uses) {
+                    LevelRow(trail, onSetLevel)
+                }
+
                 // Open or closed, from the trail status board myvitals polls. Unpaved only.
                 val condition = remember(trail, ui.conditions) { TrailConditions.forTrail(trail, ui.conditions) }
                 if (condition != null) ConditionCard(condition)
@@ -391,6 +399,74 @@ private fun AtThisTrail(nearby: List<Amenity>) {
             }
         }
     }
+}
+
+/** Where the level comes from, and a way to set your own. */
+@Composable
+private fun LevelRow(trail: Trail, onSetLevel: (Trail, DifficultyTier?) -> Unit) {
+    var picking by remember { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            when {
+                trail.userLevel != null -> "Level set by you"
+                trail.level == null && trail.mtbScale == null -> "No level on the map"
+                else -> "Level from OpenStreetMap"
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = { picking = true }) {
+            Text(if (trail.userLevel == null && trail.level == null) "Set level" else "Change")
+        }
+    }
+    if (picking) {
+        LevelPicker(
+            trail = trail,
+            onPick = { tier -> picking = false; onSetLevel(trail, tier) },
+            onDismiss = { picking = false },
+        )
+    }
+}
+
+/** The six levels to choose from, and the map's own rating back when you've set one. */
+@Composable
+internal fun LevelPicker(trail: Trail, onPick: (DifficultyTier?) -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Trail level") },
+        text = {
+            Column {
+                Text(
+                    "Saved on this phone only.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                DifficultyTier.entries.forEach { tier ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { onPick(tier) }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        LevelBadge(tier, null)
+                        Spacer(Modifier.weight(1f))
+                        if (tier == trail.level) Text("Current", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+                if (trail.userLevel != null) {
+                    val map = trail.mapLevel?.let { "${it.symbol} ${it.label}" } ?: "none"
+                    TextButton(onClick = { onPick(null) }, modifier = Modifier.padding(top = 4.dp)) {
+                        Text("Use the map's rating ($map)")
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /** "Maintained by …" and a link to the trail's or its operator's page. */

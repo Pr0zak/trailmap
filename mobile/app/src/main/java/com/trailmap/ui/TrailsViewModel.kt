@@ -4,6 +4,9 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.trailmap.data.DiagLog
+import com.trailmap.data.DifficultyTier
+import com.trailmap.data.UserLevel
+import com.trailmap.data.UserLevels
 import com.trailmap.data.ElevationClient
 import com.trailmap.data.ElevationProfile
 import com.trailmap.data.Geo
@@ -384,6 +387,9 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     private val elevation = ElevationClient()
     private val locator = Locator(app)
 
+    /** Levels you set yourself, laid over every trail as it's loaded ([UserLevels]). */
+    private var userLevels: Map<String, UserLevel> = prefs.userLevels()
+
     private val _state = MutableStateFlow(
         TrailsUiState(
             radiusMeters = DEFAULT_ALL_RADIUS,
@@ -680,7 +686,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 withTimeoutOrNull(if (mtb) MTB_LOAD_BUDGET_MS else LOAD_BUDGET_MS) {
                 while (attempt < MAX_ATTEMPTS) {
                     try {
-                        fetched = overpass.fetchTrails(center, radiusMeters, mtb = mtb, forceRefresh = force, withParks = false)
+                        fetched = fetchTrails(center, radiusMeters, mtb = mtb, forceRefresh = force, withParks = false)
                         failure = null
                         break
                     } catch (e: CancellationException) {
@@ -746,7 +752,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 if (result.parksPending) {
                     val named = runCatching {
                         withTimeoutOrNull(PARKS_BUDGET_MS) {
-                            overpass.fetchTrails(center, radiusMeters, mtb = true, forceRefresh = force)
+                            fetchTrails(center, radiusMeters, mtb = true, forceRefresh = force)
                         }
                     }.getOrElse { if (it is CancellationException) throw it else null }
                     if (named == null || seq != loadSeq) {
@@ -808,7 +814,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun loadContext(center: GeoPoint, seq: Int) {
         if (overpass.isWarm(center, MIN_FETCH_RADIUS, mtb = false)) {
             val got = runCatching {
-                withTimeoutOrNull(CONTEXT_BUDGET_MS) { overpass.fetchTrails(center, MIN_FETCH_RADIUS, mtb = false) }
+                withTimeoutOrNull(CONTEXT_BUDGET_MS) { fetchTrails(center, MIN_FETCH_RADIUS, mtb = false) }
             }.getOrElse { if (it is CancellationException) throw it else null }
             if (got != null && seq == loadSeq) {
                 contextAreas["${got.servedCenter.lat},${got.servedCenter.lon},${got.servedRadius}"] = got.trails
@@ -1403,7 +1409,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 overpass.isWarm(center, ROUTES_RADIUS_M, mtb = true)
             ) {
                 runCatching {
-                    withTimeoutOrNull(CONTEXT_BUDGET_MS) { overpass.fetchTrails(center, ROUTES_RADIUS_M, mtb = true, withParks = false) }
+                    withTimeoutOrNull(CONTEXT_BUDGET_MS) { fetchTrails(center, ROUTES_RADIUS_M, mtb = true, withParks = false) }
                 }.getOrElse { if (it is CancellationException) throw it else null }?.let { got ->
                     routeAreas["${got.servedCenter.lat},${got.servedCenter.lon},${got.servedRadius}"] = got.trails
                     while (routeAreas.size > 2) routeAreas.remove(routeAreas.keys.first())
@@ -1464,6 +1470,50 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Free-text name search (filters the list + map by trail name substring). */
     fun setQuery(q: String) = _state.update { it.copy(query = q) }
+
+    /** [OverpassClient.fetchTrails] with your own levels laid over the map's. */
+    private suspend fun fetchTrails(
+        center: GeoPoint,
+        radiusMeters: Int,
+        mtb: Boolean = false,
+        forceRefresh: Boolean = false,
+        withParks: Boolean = true,
+    ): TrailsResult {
+        val r = overpass.fetchTrails(center, radiusMeters, mtb = mtb, forceRefresh = forceRefresh, withParks = withParks)
+        val levels = userLevels
+        return if (levels.isEmpty()) r
+        else TrailsResult(UserLevels.applyAll(r.trails, levels), r.servedCenter, r.servedRadius, r.parksPending)
+    }
+
+    /**
+     * Set your own level on [trail], or clear it with null to go back to the map's. Kept on the
+     * phone; applied at once to everything already loaded, so the map and lists recolour.
+     */
+    fun setUserLevel(trail: Trail, tier: DifficultyTier?) {
+        val next = userLevels.toMutableMap()
+        if (tier == null) next.remove(trail.id) else next[trail.id] = UserLevels.of(trail, tier)
+        userLevels = next
+        prefs.setUserLevels(next)
+        DiagLog.log("levels", "${trail.id} → ${tier?.name ?: "map's rating"}")
+
+        fun List<Trail>.rated() = UserLevels.applyAll(this, next)
+        for (i in loadedAreas.indices) {
+            val a = loadedAreas[i]
+            loadedAreas[i] = LoadedArea(a.center, a.radius, a.mtb, a.trails.rated())
+        }
+        contextAreas.replaceAll { _, v -> v.rated() }
+        routeAreas.replaceAll { _, v -> v.rated() }
+        synchronized(auxTrails) { auxTrails.replaceAll { _, t -> UserLevels.apply(t, next) } }
+        _state.update {
+            it.copy(
+                trails = it.trails.rated(),
+                trailsVersion = it.trailsVersion + 1,
+                contextTrails = it.contextTrails.rated(),
+                contextVersion = it.contextVersion + 1,
+                previewTrails = it.previewTrails.rated(),
+            )
+        }
+    }
 
     /** Star/unstar a trail; persisted across launches. */
     fun toggleSaved(id: String) = _state.update {
@@ -1984,7 +2034,7 @@ class TrailsViewModel(app: Application) : AndroidViewModel(app) {
                 val reach = pts.maxOf { Geo.haversineMeters(center, it) } + RECORDED_MARGIN_M
                 val radius = reach.coerceIn(MIN_RECORDED_RADIUS_M, MAX_RECORDED_RADIUS_M).toInt()
                 val t0 = android.os.SystemClock.elapsedRealtime()
-                val result = overpass.fetchTrails(center, radius, mtb = false, withParks = false)
+                val result = fetchTrails(center, radius, mtb = false, withParks = false)
                 val along = withContext(Dispatchers.Default) {
                     TrackIndex(listOf(track)).trailsAlong(track.id, result.trails.filter { it.name != "Unnamed path" })
                 }
