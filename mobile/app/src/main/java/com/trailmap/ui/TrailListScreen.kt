@@ -8,11 +8,9 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
@@ -112,57 +110,63 @@ internal fun TrailListContent(
     // The list honours the radius chip; the map deliberately draws the wider cached set.
     val trails = ui.listed
 
+    // Same bar and sheet as the map, so the two screens filter the same way.
+    var showFilters by remember { mutableStateOf(false) }
+    if (showFilters) FilterSheet(ui, filters, onDismiss = { showFilters = false })
+
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("Trails", fontWeight = FontWeight.Bold)
-                        Text(
-                            when {
-                                ui.loading -> "Loading…"
-                                ui.mode == MapMode.MTB ->
-                                    "${ui.systems.size} systems · within ${ui.radiusMiles.roundToInt()} mi"
-                                else -> "${trails.size} within ${ui.radiusMiles.roundToInt()} mi · " + when (ui.sort) {
-                                    TrailSort.DISTANCE -> "nearest first"
-                                    TrailSort.LENGTH -> "longest first"
-                                    TrailSort.NAME -> "A to Z"
-                                    TrailSort.LAST_RIDDEN -> "last ridden first"
-                                }
-                            },
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { onSetShowSavedOnly(!ui.showSavedOnly) }) {
-                        Icon(
-                            if (ui.showSavedOnly) Icons.Filled.Star else Icons.Filled.StarBorder,
-                            contentDescription = if (ui.showSavedOnly) "Showing saved only" else "Show saved only",
-                            tint = if (ui.showSavedOnly) {
-                                MaterialTheme.colorScheme.secondary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                        )
-                    }
-                },
-            )
+            // The signboard: the screen's name and what's listed, with the search plate set
+            // into the band the way a kiosk's map panel is set into its frame.
+            Column(Modifier.background(MaterialTheme.colorScheme.inverseSurface)) {
+                TopAppBar(
+                    colors = signBand(),
+                    title = {
+                        Column {
+                            Text("Trails", style = MaterialTheme.typography.headlineMedium)
+                            Text(
+                                when {
+                                    ui.loading -> "Loading…"
+                                    ui.mode == MapMode.MTB ->
+                                        "${ui.systems.size} systems within ${ui.radiusMiles.roundToInt()} mi"
+                                    else -> "${trails.size} within ${ui.radiusMiles.roundToInt()} mi, " + when (ui.sort) {
+                                        TrailSort.DISTANCE -> "nearest first"
+                                        TrailSort.LENGTH -> "longest first"
+                                        TrailSort.NAME -> "A to Z"
+                                        TrailSort.LAST_RIDDEN -> "last ridden first"
+                                    }
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                color = onSignBandMuted(),
+                            )
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = { onSetShowSavedOnly(!ui.showSavedOnly) }) {
+                            Icon(
+                                if (ui.showSavedOnly) Icons.Filled.Star else Icons.Filled.StarBorder,
+                                contentDescription = if (ui.showSavedOnly) "Showing saved only" else "Show saved only",
+                                tint = if (ui.showSavedOnly) {
+                                    MaterialTheme.colorScheme.secondary
+                                } else {
+                                    MaterialTheme.colorScheme.inverseOnSurface
+                                },
+                            )
+                        }
+                    },
+                )
+                TrailSearchBar(
+                    ui = ui,
+                    filters = filters,
+                    onOpenFilters = { showFilters = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 12.dp, bottom = 14.dp),
+                )
+            }
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
-            // Same bar and sheet as the map, so the two screens filter the same way.
-            var showFilters by remember { mutableStateOf(false) }
-            if (showFilters) FilterSheet(ui, filters, onDismiss = { showFilters = false })
-            TrailSearchBar(
-                ui = ui,
-                filters = filters,
-                onOpenFilters = { showFilters = true },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-            )
 
             // A new order starts from its top. Keyed rows otherwise keep the old first row in
             // place, so the trails that just moved above it sit out of sight.
@@ -176,7 +180,7 @@ internal fun TrailListContent(
                 }
             }
             SortChip(
-                ui.sort, onSetSort, Modifier.padding(horizontal = 12.dp),
+                ui.sort, onSetSort, Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp),
                 // "Last ridden" only means something once there are rides to go by.
                 options = TrailSort.entries.filter { it != TrailSort.LAST_RIDDEN || ui.recorded.isNotEmpty() },
             )
@@ -312,9 +316,9 @@ private fun EmptyTrails(ui: TrailsUiState, onClearFilters: () -> Unit, onWiden: 
         )
         Spacer(Modifier.size(16.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (filtering) Button(onClick = onClearFilters) { Text(if (ui.query.isNotBlank()) "Clear search & filters" else "Clear filters") }
+            if (filtering) SignButton(onClick = onClearFilters) { Text(if (ui.query.isNotBlank()) "Clear search & filters" else "Clear filters") }
             if (wider != null && ui.error == null) {
-                OutlinedButton(onClick = { onWiden(wider) }) { Text("Search $wider mi") }
+                SignOutlinedButton(onClick = { onWiden(wider) }) { Text("Search $wider mi") }
             }
         }
     }
@@ -358,8 +362,9 @@ internal fun LevelRangeChip(min: DifficultyTier?, max: DifficultyTier?) {
 }
 
 /**
- * One trail: a surface-colored edge, the name, one meta line and the save star. Flat, with a
- * divider — about 40% shorter than the card it replaced, so more of the list fits on screen.
+ * One trail, laid out like a line on a trailhead's trail table: a blaze in the surface colour,
+ * the name and surface on the left, the length and how far away as a right-aligned column of
+ * figures, and the save star last. Flat, with a divider, so more of the list fits on screen.
  */
 @Composable
 internal fun TrailRow(
@@ -371,27 +376,26 @@ internal fun TrailRow(
 ) {
     Column(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Row(
-            Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // Purple for a horse trail, as on the map; otherwise its surface colour.
-            Box(Modifier.width(4.dp).height(44.dp).clip(RoundedCornerShape(50)).background(if (trail.horseTrail) HorseTrailColor else trail.surface.color))
+            Blaze(if (trail.horseTrail) HorseTrailColor else trail.surface.color)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
                     trail.name,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "${trail.surface.label} · %.1f mi · %.1f mi away".format(trail.lengthMiles, trail.distanceMiles),
+                        trail.surface.label,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(8.dp))
                     UseIcons(trail.uses, tint = MaterialTheme.colorScheme.onSurfaceVariant, size = 16)
                 }
                 if (trail.level != null) {
@@ -399,6 +403,15 @@ internal fun TrailRow(
                     LevelBadge(trail.level, trail.mtbScale)
                 }
                 VisitLine(visits, Modifier.padding(top = 3.dp))
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(horizontalAlignment = Alignment.End) {
+                Text("%.1f mi".format(trail.lengthMiles), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    "%.1f mi away".format(trail.distanceMiles),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             IconButton(onClick = onToggleSave) {
                 Icon(
@@ -412,20 +425,21 @@ internal fun TrailRow(
                 )
             }
         }
-        HorizontalDivider(Modifier.padding(start = 28.dp))
+        HorizontalDivider(Modifier.padding(start = 35.dp))
     }
 }
 
+/** The trail's surface as a small plate in its map colour: "Gravel" on gold, and so on. */
 @Composable
 fun SurfaceBadge(surface: SurfaceType, modifier: Modifier = Modifier) {
     Box(
         modifier
-            .clip(RoundedCornerShape(50))
+            .clip(BadgeShape)
             .background(surface.color)
-            .padding(horizontal = 10.dp, vertical = 3.dp),
+            .padding(horizontal = 8.dp, vertical = 3.dp),
     ) {
         Text(
-            surface.label.uppercase(),
+            surface.label,
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
             // White on gravel gold is 2.2:1; dark brown is 6.2:1.
@@ -441,16 +455,19 @@ fun LevelBadge(level: DifficultyTier?, scale: Int?, modifier: Modifier = Modifie
     DifficultyPill(tier, difficultyText(tier, scale), modifier)
 }
 
-/** A pill in [difficulty]'s sign colour; the white one gets an outline to show on a light card. */
+/** Badges share the blaze's corner radius, so a row of them reads as one set of markers. */
+internal val BadgeShape = RoundedCornerShape(4.dp)
+
+/** A plate in [difficulty]'s sign colour; the white one gets an outline to show on a light card. */
 @Composable
 private fun DifficultyPill(difficulty: DifficultyTier, text: String, modifier: Modifier = Modifier) {
-    val shape = RoundedCornerShape(50)
+    val shape = BadgeShape
     Box(
         modifier
             .clip(shape)
             .background(difficulty.color)
             .then(if (difficulty.outlined) Modifier.border(1.dp, Color(0xFF555555), shape) else Modifier)
-            .padding(horizontal = 10.dp, vertical = 3.dp),
+            .padding(horizontal = 8.dp, vertical = 3.dp),
     ) {
         Text(
             text,

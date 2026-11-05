@@ -12,7 +12,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.DragIndicator
 import androidx.compose.material.icons.filled.Map
-import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.key
@@ -110,6 +109,7 @@ internal fun RideDetailContent(
         Scaffold(
             topBar = {
                 TopAppBar(
+                    colors = signBand(),
                     title = { Text("Ride", fontWeight = FontWeight.Bold) },
                     navigationIcon = {
                         IconButton(onClick = onBack) {
@@ -129,6 +129,7 @@ internal fun RideDetailContent(
     Scaffold(
         topBar = {
             TopAppBar(
+                colors = signBand(),
                 title = { Text(ride.name, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -148,7 +149,7 @@ internal fun RideDetailContent(
         bottomBar = {
             if (ride.trails.isNotEmpty()) {
                 Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
-                    Button(
+                    SignButton(
                         onClick = onShowOnMap,
                         modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp),
                     ) {

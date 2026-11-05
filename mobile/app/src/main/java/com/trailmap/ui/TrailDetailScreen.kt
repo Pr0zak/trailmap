@@ -65,8 +65,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.Directions
-import androidx.compose.material3.Button
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
@@ -179,6 +177,7 @@ internal fun TrailDetailContent(
     Scaffold(
         topBar = {
             TopAppBar(
+                colors = signBand(),
                 title = {
                     Text(
                         trail?.name ?: "Trail",
@@ -202,7 +201,7 @@ internal fun TrailDetailContent(
                                 tint = if (saved) {
                                     MaterialTheme.colorScheme.secondary
                                 } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                    MaterialTheme.colorScheme.inverseOnSurface
                                 },
                             )
                         }
@@ -221,12 +220,12 @@ internal fun TrailDetailContent(
                         Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Button(onClick = { showAddToRide = true }, modifier = Modifier.weight(1f)) {
+                        SignButton(onClick = { showAddToRide = true }, modifier = Modifier.weight(1f)) {
                             Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null, Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("Add to ride")
                         }
-                        OutlinedButton(onClick = { openDirections(trail) }, modifier = Modifier.weight(1f)) {
+                        SignOutlinedButton(onClick = { openDirections(trail) }, modifier = Modifier.weight(1f)) {
                             Icon(Icons.Filled.Directions, null, Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("Directions")

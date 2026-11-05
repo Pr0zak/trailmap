@@ -28,7 +28,6 @@ import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Timeline
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -36,7 +35,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -142,7 +140,7 @@ internal fun RecordedList(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.size(16.dp))
-            Button(onClick = onOpenMyVitals) { Text("Connect myvitals") }
+            SignButton(onClick = onOpenMyVitals) { Text("Connect myvitals") }
         }
         return
     }
@@ -246,6 +244,7 @@ internal fun RecordedRideContent(
     Scaffold(
         topBar = {
             TopAppBar(
+                colors = signBand(),
                 title = {
                     Column {
                         Text(
@@ -258,7 +257,7 @@ internal fun RecordedRideContent(
                             Text(
                                 longDateTime(track.start),
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = onSignBandMuted(),
                             )
                         }
                     }
@@ -275,13 +274,13 @@ internal fun RecordedRideContent(
                         Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Button(onClick = onShowOnMap, modifier = Modifier.weight(1f)) {
+                        SignButton(onClick = onShowOnMap, modifier = Modifier.weight(1f)) {
                             Icon(Icons.Filled.Map, null, Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("Show on map")
                         }
                         val ready = (trails as? RecordedTrails.Ready)?.trails.orEmpty()
-                        OutlinedButton(onClick = onSaveAsRide, enabled = ready.isNotEmpty(), modifier = Modifier.weight(1f)) {
+                        SignOutlinedButton(onClick = onSaveAsRide, enabled = ready.isNotEmpty(), modifier = Modifier.weight(1f)) {
                             Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null, Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("Save as ride")

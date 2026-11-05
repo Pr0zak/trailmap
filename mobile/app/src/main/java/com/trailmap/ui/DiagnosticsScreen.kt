@@ -31,7 +31,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -103,13 +102,14 @@ internal fun DiagnosticsContent(
     Scaffold(
         topBar = {
             TopAppBar(
+                colors = signBand(),
                 title = {
                     Column {
                         Text("Diagnostics")
                         Text(
-                            "trailmap ${BuildConfig.VERSION_NAME} · auto-refreshing",
+                            "trailmap ${BuildConfig.VERSION_NAME}, refreshing as it runs",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = onSignBandMuted(),
                         )
                     }
                 },

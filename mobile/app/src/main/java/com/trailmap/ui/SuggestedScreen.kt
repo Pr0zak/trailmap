@@ -17,7 +17,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -138,7 +137,7 @@ internal fun SuggestionCard(s: SuggestedRide, onSave: (SuggestedRide) -> Unit, o
                 s.level?.let { LevelBadge(it, null) }
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = { onPreview(s) }) { Text("Show on map") }
-                OutlinedButton(onClick = { onSave(s) }) { Text("Save as ride") }
+                SignOutlinedButton(onClick = { onSave(s) }) { Text("Save as ride") }
             }
         }
     }

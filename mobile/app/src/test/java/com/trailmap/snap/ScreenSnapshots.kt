@@ -6,6 +6,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import app.cash.paparazzi.DeviceConfig
 import app.cash.paparazzi.Paparazzi
+import com.trailmap.BottomTabs
+import com.trailmap.Tab
 import com.trailmap.ui.DiagnosticsContent
 import com.trailmap.ui.FilterActions
 import com.trailmap.ui.FilterSheetContent
@@ -313,4 +315,12 @@ class ScreenSnapshots {
     @Test fun diagnostics() = shot {
         DiagnosticsContent(Samples.diagLines, onBack = {}, onShare = {}, onClear = {})
     }
+
+    // The bottom bar sits under every top-level screen, so its indicator is part of the look.
+    @Composable
+    private fun Tabs(dark: Boolean) = Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        Box(Modifier.align(Alignment.BottomCenter)) { BottomTabs(selected = Tab.List, onSelect = {}) }
+    }
+    @Test fun bottom_tabs() = shot { Tabs(dark = false) }
+    @Test fun bottom_tabs_dark() = shot(dark = true) { Tabs(dark = true) }
 }

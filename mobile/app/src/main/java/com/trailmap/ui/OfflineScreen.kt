@@ -21,7 +21,6 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -247,6 +246,7 @@ internal fun OfflineContent(
     Scaffold(
         topBar = {
             TopAppBar(
+                colors = signBand(),
                 title = { Text("Offline maps") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -282,7 +282,7 @@ internal fun OfflineContent(
 
             item {
                 val vb = ui.viewBounds
-                Button(onClick = onDownloadView, enabled = vb != null, modifier = Modifier.fillMaxWidth()) {
+                SignButton(onClick = onDownloadView, enabled = vb != null, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Filled.Download, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text("Download current view")
@@ -411,7 +411,7 @@ private fun TrailPackCard(ui: TrailsUiState, onOpenStates: () -> Unit, onCheck: 
             )
             PackSyncStatus(ui)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onOpenStates) { Text(if (onPhone.isEmpty()) "Choose states" else "Manage states") }
+                SignButton(onClick = onOpenStates) { Text(if (onPhone.isEmpty()) "Choose states" else "Manage states") }
                 if (onPhone.isNotEmpty()) TextButton(onClick = onCheck) { Text("Check for updates") }
             }
         }

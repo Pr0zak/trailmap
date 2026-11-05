@@ -25,7 +25,6 @@ import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ElevatedButton
 import androidx.compose.material3.FloatingActionButton
@@ -36,7 +35,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.DropdownMenu
@@ -44,6 +42,7 @@ import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -489,7 +488,7 @@ internal fun BoxScope.MapOverlays(
             // loaded trails and auto-load is off, otherwise a quiet count of what's drawn.
             val offerManualSearch = ui.viewportStale && !ui.loading && !ui.autoLoadOnPan
             if (offerManualSearch) {
-                ElevatedButton(onClick = { onSearchThisArea() }) {
+                ElevatedButton(onClick = { onSearchThisArea() }, shape = SignShape) {
                     Icon(Icons.Filled.Search, contentDescription = null, Modifier.size(16.dp))
                     Spacer(Modifier.size(6.dp))
                     Text("Search this area")
@@ -513,8 +512,9 @@ internal fun BoxScope.MapOverlays(
             ui.highlightedRideId?.let { rid -> (ui.rides + listOfNotNull(ui.previewRide)).firstOrNull { it.id == rid } }?.let { ride ->
                 val shown = ride.trails.count { t -> ui.trails.any { it.id == t.id } || ui.previewTrails.any { it.id == t.id } }
                 Surface(
-                    shape = RoundedCornerShape(50),
-                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = MaterialTheme.shapes.small,
+                    color = MaterialTheme.colorScheme.inverseSurface,
+                    contentColor = MaterialTheme.colorScheme.inverseOnSurface,
                     shadowElevation = 2.dp,
                 ) {
                     Row(Modifier.padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -522,7 +522,6 @@ internal fun BoxScope.MapOverlays(
                             if (shown < ride.trails.size) "${ride.name} · $shown of ${ride.trails.size} trails loaded"
                             else "${ride.name} · %.1f mi".format(ride.totalMiles),
                             style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
                         )
                         IconButton(onClick = onClearRide) {
                             Icon(Icons.Filled.Close, contentDescription = "Stop showing ride")
@@ -534,12 +533,13 @@ internal fun BoxScope.MapOverlays(
             // "Show on map" for a recorded activity: which one, and a way to put it away.
             ui.highlightedTrackId?.let { ui.recordedById[it] }?.let { track ->
                 Surface(
-                    shape = RoundedCornerShape(50),
-                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = MaterialTheme.shapes.small,
+                    color = MaterialTheme.colorScheme.inverseSurface,
+                    contentColor = MaterialTheme.colorScheme.inverseOnSurface,
                     shadowElevation = 2.dp,
                 ) {
                     Row(Modifier.padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(track.kind.icon, contentDescription = null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                        Icon(track.kind.icon, contentDescription = null, Modifier.size(18.dp))
                         Spacer(Modifier.size(6.dp))
                         Text(
                             listOfNotNull(
@@ -548,7 +548,6 @@ internal fun BoxScope.MapOverlays(
                                 track.distanceMiles?.let { "%.1f mi".format(it) },
                             ).joinToString(" · "),
                             style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
                             maxLines = 1,
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false),
@@ -565,8 +564,9 @@ internal fun BoxScope.MapOverlays(
             // background.
             ui.packSuggestion?.let { st ->
                 Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.inverseSurface,
+                    contentColor = MaterialTheme.colorScheme.inverseOnSurface,
                     shadowElevation = 2.dp,
                 ) {
                     Row(Modifier.padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -574,15 +574,17 @@ internal fun BoxScope.MapOverlays(
                             Text(
                                 "Get ${st.name} trails on this phone",
                                 style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer,
                             )
                             Text(
-                                "Instant loading, even offline · ${megabytes(st.bytes)}",
+                                "Instant loading, even offline, ${megabytes(st.bytes)}",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                color = onSignBandMuted(),
                             )
                         }
-                        TextButton(onClick = { onGetPackState(st.slug) }) { Text("Get") }
+                        TextButton(
+                            onClick = { onGetPackState(st.slug) },
+                            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.inverseOnSurface),
+                        ) { Text("Get") }
                         IconButton(onClick = onDismissPackSuggestion) {
                             Icon(Icons.Filled.Close, contentDescription = "Not now")
                         }
@@ -998,7 +1000,7 @@ private fun TrailPeekCard(
 ) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(24.dp),
+        shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surfaceContainerLowest,
         shadowElevation = 8.dp,
     ) {
@@ -1006,8 +1008,7 @@ private fun TrailPeekCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     trail.name,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.headlineSmall,
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
@@ -1038,8 +1039,8 @@ private fun TrailPeekCard(
             }
             Spacer(Modifier.size(12.dp))
             Row(Modifier.padding(end = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onDetails, modifier = Modifier.weight(1f)) { Text("Details") }
-                OutlinedButton(onClick = onAddToRide, modifier = Modifier.weight(1f)) {
+                SignButton(onClick = onDetails, modifier = Modifier.weight(1f)) { Text("Details") }
+                SignOutlinedButton(onClick = onAddToRide, modifier = Modifier.weight(1f)) {
                     Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null, Modifier.size(18.dp))
                     Spacer(Modifier.size(6.dp))
                     Text("Add to ride")
@@ -1055,7 +1056,7 @@ private fun ConditionPeekCard(status: TrailStatus, onClose: () -> Unit, modifier
     val context = androidx.compose.ui.platform.LocalContext.current
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(24.dp),
+        shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surfaceContainerLowest,
         shadowElevation = 8.dp,
     ) {
@@ -1110,7 +1111,7 @@ internal fun AmenityPeekCard(amenity: Amenity, onClose: () -> Unit, modifier: Mo
     val context = androidx.compose.ui.platform.LocalContext.current
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(24.dp),
+        shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surfaceContainerLowest,
         shadowElevation = 8.dp,
     ) {
@@ -1165,8 +1166,8 @@ internal fun AmenityPeekCard(amenity: Amenity, onClose: () -> Unit, modifier: Mo
 
 @Composable
 private fun PeekStat(value: String, label: String) = Column {
-    Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-    Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Text(value, style = MaterialTheme.typography.titleLarge)
+    Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 /**

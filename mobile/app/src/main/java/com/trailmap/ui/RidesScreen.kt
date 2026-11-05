@@ -4,7 +4,6 @@ import com.trailmap.data.Ride
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Route
-import androidx.compose.material3.Button
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.ui.text.style.TextAlign
@@ -17,6 +16,7 @@ import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.ui.platform.LocalContext
 import com.trailmap.data.Trail
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -109,9 +109,13 @@ internal fun RidesContent(
 
     Scaffold(
         topBar = {
-            Column {
+            // The signboard, with the three lists as tabs cut into its lower edge.
+            val ink = MaterialTheme.colorScheme.inverseSurface
+            val bone = MaterialTheme.colorScheme.inverseOnSurface
+            Column(Modifier.background(ink)) {
                 TopAppBar(
-                    title = { Text("Rides", fontWeight = FontWeight.Bold) },
+                    colors = signBand(),
+                    title = { Text("Rides", style = MaterialTheme.typography.headlineMedium) },
                     actions = {
                         // The connection's settings, once there is one; before that the Recorded
                         // tab itself offers to connect.
@@ -122,12 +126,26 @@ internal fun RidesContent(
                         }
                     },
                 )
-                androidx.compose.material3.PrimaryTabRow(selectedTabIndex = tab.ordinal) {
+                androidx.compose.material3.PrimaryTabRow(
+                    selectedTabIndex = tab.ordinal,
+                    containerColor = ink,
+                    contentColor = bone,
+                    indicator = {
+                        androidx.compose.material3.TabRowDefaults.PrimaryIndicator(
+                            Modifier.tabIndicatorOffset(tab.ordinal, matchContentSize = true),
+                            width = androidx.compose.ui.unit.Dp.Unspecified,
+                            color = bone,
+                        )
+                    },
+                    divider = {},
+                ) {
                     RidesTab.entries.forEach { t ->
                         androidx.compose.material3.Tab(
                             selected = tab == t,
                             onClick = { tab = t },
                             text = { Text(t.label) },
+                            selectedContentColor = bone,
+                            unselectedContentColor = bone.copy(alpha = 0.6f),
                         )
                     }
                 }
@@ -137,6 +155,8 @@ internal fun RidesContent(
             if (tab == RidesTab.PLANNED) {
                 ExtendedFloatingActionButton(
                     onClick = { showNewDialog = true },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
                     icon = { Icon(Icons.Filled.Add, contentDescription = null) },
                     text = { Text("New ride") },
                 )
@@ -164,7 +184,7 @@ internal fun RidesContent(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.size(16.dp))
-                Button(onClick = onBrowseTrails) { Text("Browse trails") }
+                SignButton(onClick = onBrowseTrails) { Text("Browse trails") }
             }
         } else {
             LazyColumn(
@@ -194,22 +214,23 @@ internal fun RidesContent(
 private fun RideCard(ride: Ride, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.Bottom) {
+                Row(verticalAlignment = Alignment.Top) {
                     Text(
                         ride.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleLarge,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
-                    Text("%.1f mi".format(ride.totalMiles), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.size(12.dp))
+                    Text("%.1f mi".format(ride.totalMiles), style = MaterialTheme.typography.titleLarge)
                 }
                 Text(
                     if (ride.trails.isEmpty()) "No trails yet" else ride.trails.joinToString(" → ") { it.name },

@@ -24,7 +24,6 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -32,7 +31,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -101,6 +99,7 @@ internal fun MyVitalsContent(
     Scaffold(
         topBar = {
             TopAppBar(
+                colors = signBand(),
                 title = { Text("myvitals", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
@@ -167,24 +166,24 @@ private fun ConnectForm(ui: TrailsUiState, onConnect: (String, String) -> Unit) 
     val busy = ui.myVitals.connecting
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (offer != null) {
-            Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.fillMaxWidth()) {
+            Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.Top) {
                     Icon(
                         Icons.Filled.Link, contentDescription = null,
-                        Modifier.padding(top = 2.dp).size(20.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                        Modifier.padding(top = 2.dp).size(20.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer,
                     )
                     Spacer(Modifier.width(12.dp))
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
                             "Filled in from the myvitals app",
                             style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
                         )
                         OfferHost(offer)
                         Text(
                             "Check that's your server, then tap Connect.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
                         )
                     }
                 }
@@ -250,7 +249,7 @@ private fun ConnectForm(ui: TrailsUiState, onConnect: (String, String) -> Unit) 
             modifier = Modifier.fillMaxWidth(),
         )
         ui.myVitals.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
-        Button(
+        SignButton(
             onClick = { onConnect(url, token) },
             enabled = !busy && url.isNotBlank() && token.isNotBlank(),
             modifier = Modifier.fillMaxWidth(),
@@ -283,10 +282,10 @@ private fun OfferHost(offer: MyVitalsOffer) {
         host,
         style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.onSecondaryContainer,
+        color = MaterialTheme.colorScheme.onPrimaryContainer,
     )
     if (offer.url != host) {
-        Text(offer.url, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
+        Text(offer.url, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
     }
 }
 
@@ -297,25 +296,25 @@ private fun OfferHost(offer: MyVitalsOffer) {
  */
 @Composable
 private fun OfferCard(offer: MyVitalsOffer, busy: Boolean, error: String?, onAccept: () -> Unit, onDismiss: () -> Unit) {
-    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.fillMaxWidth()) {
+    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 16.dp, bottom = 8.dp)) {
             Row(Modifier.padding(end = 8.dp), verticalAlignment = Alignment.Top) {
                 Icon(
                     Icons.Filled.Link, contentDescription = null,
-                    Modifier.padding(top = 2.dp).size(20.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    Modifier.padding(top = 2.dp).size(20.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
                 Spacer(Modifier.width(12.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
                         "The myvitals app sent a connection to",
                         style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
                     )
                     OfferHost(offer)
                     Text(
                         "The one below stays unless this one connects.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.padding(top = 2.dp),
                     )
                     error?.let {
@@ -331,7 +330,7 @@ private fun OfferCard(offer: MyVitalsOffer, busy: Boolean, error: String?, onAcc
             Row(Modifier.align(Alignment.End).padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onDismiss, enabled = !busy) { Text("Dismiss") }
                 Spacer(Modifier.width(4.dp))
-                Button(onClick = onAccept, enabled = !busy) {
+                SignButton(onClick = onAccept, enabled = !busy) {
                     if (busy) {
                         CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(8.dp))
@@ -348,14 +347,14 @@ private fun OfferCard(offer: MyVitalsOffer, busy: Boolean, error: String?, onAcc
 /** The myvitals app sent the connection trailmap already uses: nothing to switch, just say so. */
 @Composable
 private fun AlreadyConnectedNote(offer: MyVitalsOffer, onDismiss: () -> Unit) {
-    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.fillMaxWidth()) {
+    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Filled.CheckCircle, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
+            Icon(Icons.Filled.CheckCircle, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
             Spacer(Modifier.width(12.dp))
             Text(
                 "Already connected to ${offer.host ?: offer.url}",
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
                 modifier = Modifier.weight(1f),
             )
             TextButton(onClick = onDismiss) { Text("OK") }
@@ -397,7 +396,7 @@ private fun Connected(
                 )
             }
             Spacer(Modifier.size(8.dp))
-            Button(onClick = onSync, enabled = !v.syncing) {
+            SignButton(onClick = onSync, enabled = !v.syncing) {
                 if (v.syncing) {
                     CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
                 } else {
@@ -425,7 +424,7 @@ private fun Connected(
         Switch(checked = v.autoSync, onCheckedChange = onSetAutoSync)
     }
     HorizontalDivider()
-    OutlinedButton(
+    SignOutlinedButton(
         onClick = { confirmDisconnect = true },
         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
         modifier = Modifier.fillMaxWidth(),

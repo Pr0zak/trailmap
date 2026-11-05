@@ -105,7 +105,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private sealed class Tab(val route: String, val label: String) {
+internal sealed class Tab(val route: String, val label: String) {
     data object Map : Tab("map", "Map")
     data object List : Tab("list", "Trails")
     data object Rides : Tab("rides", "Rides")
@@ -165,26 +165,10 @@ private fun TrailmapRoot(vm: TrailsViewModel) {
         bottomBar = {
             // Bar shows on top-level tabs; hidden on detail/ride/offline for an immersive read.
             if (currentRoute in tabs.map { it.route }) {
-                NavigationBar {
-                    tabs.forEach { tab ->
-                        val selected = backStack?.destination?.hierarchy?.any { it.route == tab.route } == true
-                        NavigationBarItem(
-                            selected = selected,
-                            onClick = { goToTab(tab) },
-                            icon = {
-                                Icon(
-                                    when (tab) {
-                                        Tab.Map -> Icons.Filled.Map
-                                        Tab.List -> Icons.AutoMirrored.Filled.List
-                                        Tab.Rides -> Icons.Filled.Route
-                                    },
-                                    contentDescription = tab.label,
-                                )
-                            },
-                            label = { Text(tab.label) },
-                        )
-                    }
-                }
+                BottomTabs(
+                    selected = tabs.firstOrNull { tab -> backStack?.destination?.hierarchy?.any { it.route == tab.route } == true },
+                    onSelect = { goToTab(it) },
+                )
             }
         },
     ) { padding ->
@@ -265,6 +249,30 @@ private fun TrailmapRoot(vm: TrailsViewModel) {
     }
 
     UpdateGate()
+}
+
+/** The three top-level tabs. Stateless, so the snapshot tests can render it. */
+@Composable
+internal fun BottomTabs(selected: Tab?, onSelect: (Tab) -> Unit) {
+    NavigationBar {
+        listOf(Tab.Map, Tab.List, Tab.Rides).forEach { tab ->
+            NavigationBarItem(
+                selected = tab == selected,
+                onClick = { onSelect(tab) },
+                icon = {
+                    Icon(
+                        when (tab) {
+                            Tab.Map -> Icons.Filled.Map
+                            Tab.List -> Icons.AutoMirrored.Filled.List
+                            Tab.Rides -> Icons.Filled.Route
+                        },
+                        contentDescription = tab.label,
+                    )
+                },
+                label = { Text(tab.label) },
+            )
+        }
+    }
 }
 
 /** On launch, polls GitHub Releases; if a newer APK exists, offers to download + install it. */

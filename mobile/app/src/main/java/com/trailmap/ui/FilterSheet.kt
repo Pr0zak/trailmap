@@ -27,7 +27,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
-import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -124,7 +123,7 @@ fun TrailSearchBar(
 ) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(28.dp),
+        shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceContainerLowest,
         shadowElevation = 3.dp,
     ) {
@@ -178,7 +177,7 @@ fun ModeToggle(mode: MapMode, onSetMode: (MapMode) -> Unit, modifier: Modifier =
             SegmentedButton(
                 selected = mode == m,
                 onClick = { onSetMode(m) },
-                shape = SegmentedButtonDefaults.itemShape(i, 2),
+                shape = SegmentedButtonDefaults.itemShape(i, 2, SignShape),
                 icon = {},
             ) { Text(label, style = MaterialTheme.typography.labelMedium) }
         }
@@ -221,7 +220,7 @@ internal fun FilterSheetContent(ui: TrailsUiState, filters: FilterActions, onDon
                 SegmentedButton(
                     selected = ui.radiusMiles.roundToInt() == miles,
                     onClick = { filters.setRadiusMiles(miles) },
-                    shape = SegmentedButtonDefaults.itemShape(i, options.size),
+                    shape = SegmentedButtonDefaults.itemShape(i, options.size, SignShape),
                 ) { Text("$miles mi") }
             }
         }
@@ -315,7 +314,7 @@ internal fun FilterSheetContent(ui: TrailsUiState, filters: FilterActions, onDon
             }
             Switch(checked = ui.autoLoadOnPan, onCheckedChange = filters.setAutoLoad)
         }
-        Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) {
+        SignButton(onClick = onDone, modifier = Modifier.fillMaxWidth()) {
             val n = ui.filtered.size
             Text(if (n == 1) "Show 1 trail" else "Show $n trails")
         }

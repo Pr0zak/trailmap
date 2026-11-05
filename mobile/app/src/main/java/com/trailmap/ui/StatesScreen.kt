@@ -67,6 +67,7 @@ internal fun StatesContent(
     Scaffold(
         topBar = {
             TopAppBar(
+                colors = signBand(),
                 title = { Text("Trail data") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
